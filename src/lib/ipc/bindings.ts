@@ -4,6 +4,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ApplicationInfo = { name: string, version: string, platform: string, capabilities: Array<string>, };
 
+export type CredentialStoreKind = "windows" | "macos" | "unsupported";
+
+export type StorageErrorCode = "credential_store_unavailable" | "database_key_unavailable" | "database_key_invalid" | "database_open_failed" | "cipher_unavailable" | "fts5_unavailable" | "migration_failed" | "storage_busy" | "not_found" | "revision_conflict" | "constraint_violation" | "invalid_data" | "cleanup_pending" | "internal";
+
+export type StorageStatus = { ready: boolean, schemaVersion: number, cipherAvailable: boolean, fts5Available: boolean, credentialStore: CredentialStoreKind, };
+
+export type StorageCommandError = { code: StorageErrorCode, message: string, retryable: boolean, };
+
 export function applicationInfo(): Promise<unknown> {
   return invoke("application_info");
+}
+
+export function storageStatus(): Promise<unknown> {
+  return invoke("storage_status");
 }

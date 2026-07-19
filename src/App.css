@@ -647,6 +647,14 @@ kbd {
   border-radius: 50%;
   box-shadow: 0 0 0 3px rgba(101, 162, 122, 0.12);
 }
+.status-dot.warning {
+  background: #c97942;
+  box-shadow: 0 0 0 3px rgba(201, 121, 66, 0.12);
+}
+.status-dot.neutral {
+  background: #9a9396;
+  box-shadow: 0 0 0 3px rgba(154, 147, 150, 0.12);
+}
 .status-divider {
   width: 1px;
   height: 10px;

@@ -1,10 +1,7 @@
 import { applicationInfo, type ApplicationInfo } from "./bindings";
+import { isRecord } from "./decode";
 
 export type { ApplicationInfo } from "./bindings";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function decodeApplicationInfo(value: unknown): ApplicationInfo {
   if (!isRecord(value)) {

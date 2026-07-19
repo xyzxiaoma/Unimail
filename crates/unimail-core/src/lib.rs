@@ -1,7 +1,25 @@
 //! Provider-neutral Unimail domain foundations.
 
+mod domain;
+mod ids;
+mod storage;
+
 use serde::Serialize;
 use ts_rs::TS;
+
+pub use domain::{
+    Account, AccountAuthState, AccountCreateInput, AddressRole, Attachment, AttachmentInput,
+    CredentialRef, DeleteAccountResult, Draft, DraftAddress, DraftAttachmentInput, DraftSaveInput,
+    DraftSummary, Mailbox, MailboxRole, MailboxUpsertInput, MessageAddress, MessageAddressInput,
+    MessageDetail, MessageDirection, MessageListInput, MessagePage, MessagePageCursor,
+    MessageReadStateInput, MessageSummary, MessageUpsertInput, MessageUpsertResult, Provider,
+    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey,
+};
+pub use ids::{AccountId, AttachmentId, DraftId, MailboxId, MessageId, OperationId};
+pub use storage::{
+    CredentialStore, CredentialStoreError, CredentialStoreKind, RepositoryError, RepositoryResult,
+    SecretBytes, StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus,
+};
 
 /// Non-sensitive application metadata exposed to the bundled frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

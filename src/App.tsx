@@ -1,6 +1,11 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
+import {
+  decodeStorageCommandError,
+  getStorageStatus,
+  type StorageStatus,
+} from "./lib/ipc/storage-status";
 
 type IconName =
   | "chevron"
@@ -300,18 +305,25 @@ function ComposePanel({ onClose }: { onClose: () => void }) {
 
 function StatusBar({
   appInfo,
+  storageMessage,
+  storageReady,
   syncMessage,
 }: {
   appInfo: ApplicationInfo | null;
+  storageMessage: string;
+  storageReady: boolean | null;
   syncMessage: string;
 }) {
   return (
     <footer className="status-bar">
-      <div className="status-group">
-        <span className="status-dot" />
+      <div className="status-group" aria-live="polite">
+        <span
+          aria-hidden="true"
+          className={`status-dot${storageReady === false ? " warning" : storageReady === null ? " neutral" : ""}`}
+        />
         <span>{appInfo ? `${appInfo.name} ${appInfo.version}` : "本地模式"}</span>
         <span className="status-divider" />
-        <span className="offline-badge">离线可用</span>
+        <span className="offline-badge">{storageMessage}</span>
       </div>
       <div className="status-group" aria-live="polite">
         <span>{syncMessage}</span>
@@ -325,6 +337,8 @@ function StatusBar({
 export default function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [appInfo, setAppInfo] = useState<ApplicationInfo | null>(null);
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [storageMessage, setStorageMessage] = useState("正在检查加密存储");
   const [syncMessage, setSyncMessage] = useState("等待添加账户");
   const composeButtonRef = useRef<HTMLDivElement>(null);
 
@@ -336,6 +350,31 @@ export default function App() {
       })
       .catch(() => {
         /* Web preview and unavailable desktop IPC remain usable. */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getStorageStatus()
+      .then((status) => {
+        if (!active) return;
+        setStorageStatus(status);
+        setStorageMessage(
+          status.ready
+            ? `加密存储已就绪 · Schema ${String(status.schemaVersion)}`
+            : "加密存储未就绪",
+        );
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        try {
+          setStorageMessage(decodeStorageCommandError(error).message);
+        } catch {
+          setStorageMessage("无法读取加密存储状态");
+        }
       });
     return () => {
       active = false;
@@ -368,7 +407,12 @@ export default function App() {
         <ReaderPane />
         {composeOpen && <ComposePanel onClose={closeCompose} />}
       </div>
-      <StatusBar appInfo={appInfo} syncMessage={syncMessage} />
+      <StatusBar
+        appInfo={appInfo}
+        storageMessage={storageMessage}
+        storageReady={storageStatus?.ready ?? null}
+        syncMessage={syncMessage}
+      />
     </div>
   );
 }
