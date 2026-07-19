@@ -61,7 +61,7 @@ jobs:
         run: npm run ci:validate
       - name: 构建未签名发布候选
         run: npm run tauri build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}-${{ github.ref_name }}
           path: ${{ matrix.paths }}
