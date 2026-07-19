@@ -53,21 +53,21 @@ Establish the provider-neutral contracts and shared RFC 5322/MIME implementation
 
 ## Acceptance Criteria
 
-- [ ] Public, documented, object-safe provider/authentication/MIME ports compile behind `Arc<dyn ...>` without provider SDK dependencies in `unimail-core`.
-- [ ] Initial sync validates `1..=500`; incremental pages expose normalized remote changes and a redacted checkpoint/continuation contract.
-- [ ] The public V1 provider surface contains no delete/archive/star/label/folder mutation.
-- [ ] Attachment retrieval is streaming/sink based and does not return a complete `Vec<u8>`.
-- [ ] Desired read-state assignment and fake-provider repeated pages are idempotent.
-- [ ] Cancellation and failed pages cannot return a committable checkpoint.
-- [ ] Accepted, rejected, and unknown-after-submission results are distinguishable; tests prove ambiguous submission is not auto-retried.
-- [ ] Typed Gmail, Graph, and IMAP cursor examples round-trip through the opaque JSON representation without exposing their contents through `Debug`.
-- [ ] MIME tests cover nested multipart, alternative/related selection, embedded messages, transfer encodings, encoded headers, filename continuations, charset fallback, ordered addresses, inline attachments, malformed/truncated input, and configured size limits.
-- [ ] Compose tests prove stable Message-ID/Date usage, reply headers, body alternatives, attachments, and Bcc envelope/header separation.
-- [ ] Parser property tests do not panic on arbitrary/truncated input within the configured input budget.
-- [ ] Fake and conformance tests run locally without network access or secrets.
-- [ ] Safe error/debug output contains no token, credential, body, raw response, local path, or opaque cursor value.
-- [ ] Formatting, Clippy with denied warnings, dependency checks, workspace tests, generated-binding drift checks, and Windows/macOS CI builds pass.
-- [ ] Proven provider/MIME/error/redaction rules are recorded in `.trellis/spec/backend/`.
+- [x] Public, documented, object-safe provider/authentication/MIME ports compile behind `Arc<dyn ...>` without provider SDK dependencies in `unimail-core`.
+- [x] Initial sync validates `1..=500`; incremental pages expose normalized remote changes and a redacted checkpoint/continuation contract.
+- [x] The public V1 provider surface contains no delete/archive/star/label/folder mutation.
+- [x] Attachment retrieval is streaming/sink based and does not return a complete `Vec<u8>`.
+- [x] Desired read-state assignment and fake-provider repeated pages are idempotent.
+- [x] Cancellation and failed pages cannot return a committable checkpoint.
+- [x] Accepted, rejected, and unknown-after-submission results are distinguishable; tests prove ambiguous submission is not auto-retried.
+- [x] Typed Gmail, Graph, and IMAP cursor examples round-trip through the opaque JSON representation without exposing their contents through `Debug`.
+- [x] MIME tests cover nested multipart, alternative/related selection, embedded messages, transfer encodings, encoded headers, filename continuations, charset fallback, ordered addresses, inline attachments, malformed/truncated input, and configured size limits.
+- [x] Compose tests prove stable Message-ID/Date usage, reply headers, body alternatives, attachments, and Bcc envelope/header separation.
+- [x] Parser property tests do not panic on arbitrary/truncated input within the configured input budget.
+- [x] Fake and conformance tests run locally without network access or secrets.
+- [x] Safe error/debug output contains no token, credential, body, raw response, local path, or opaque cursor value.
+- [x] Formatting, Clippy with denied warnings, dependency checks, workspace tests, generated-binding drift checks, and Windows/macOS CI builds pass.
+- [x] Proven provider/MIME/error/redaction rules are recorded in `.trellis/spec/backend/`.
 
 ## Out of Scope
 
