@@ -23,18 +23,18 @@ Establish Unimail's durable local source of truth: provider-neutral mail domain 
 
 ## Acceptance Criteria
 
-- [ ] A fresh temporary profile creates an encrypted database, migrations reach schema version 1, and reopening with the stored key succeeds.
-- [ ] Opening/querying the database without the key or with a wrong key cannot read the schema/content.
-- [ ] The packaged SQLCipher build reports a nonempty cipher version and supports a real FTS5 create/query probe.
-- [ ] The database key is exactly 256 bits of OS-generated randomness and only the credential-store adapter receives its serialized form.
-- [ ] Fake credential-store tests cover create/read/delete, unavailable store, missing key with existing DB, and cleanup retry behavior.
-- [ ] A native credential-store test exists behind an explicit ignored/manual gate and never prints the test secret.
-- [ ] All migrations pass fresh, idempotent latest-to-latest, rollback-on-failure, foreign-key, uniqueness, cascade, and FTS rebuild tests.
-- [ ] Repository tests demonstrate message upsert idempotency, deterministic paging, draft revision protection, cursor/data atomicity, and account-local cascade cleanup.
-- [ ] No migration/table/DTO contains plaintext credential/token fields.
-- [ ] `storage_status` returns only readiness, schema/cipher/FTS capability state, and safe error codes; it exposes no path, key, device, or account data.
-- [ ] Generated IPC bindings and runtime decoder tests cover valid, missing, wrong-type, and rejected-command cases.
-- [ ] Frontend checks, Rust formatting/Clippy/tests, binding drift, dependency audit, and Windows/macOS CI builds pass.
+- [x] A fresh temporary profile creates an encrypted database, migrations reach schema version 1, and reopening with the stored key succeeds.
+- [x] Opening/querying the database without the key or with a wrong key cannot read the schema/content.
+- [x] The packaged SQLCipher build reports a nonempty cipher version and supports a real FTS5 create/query probe.
+- [x] The database key is exactly 256 bits of OS-generated randomness and only the credential-store adapter receives its serialized form.
+- [x] Fake credential-store tests cover create/read/delete, unavailable store, missing key with existing DB, and cleanup retry behavior.
+- [x] A native credential-store test exists behind an explicit ignored/manual gate and never prints the test secret.
+- [x] All migrations pass fresh, idempotent latest-to-latest, rollback-on-failure, foreign-key, uniqueness, cascade, and FTS rebuild tests.
+- [x] Repository tests demonstrate message upsert idempotency, deterministic paging, draft revision protection, cursor/data atomicity, and account-local cascade cleanup.
+- [x] No migration/table/DTO contains plaintext credential/token fields.
+- [x] `storage_status` returns only readiness, schema/cipher/FTS capability state, and safe error codes; it exposes no path, key, device, or account data.
+- [x] Generated IPC bindings and runtime decoder tests cover valid, missing, wrong-type, and rejected-command cases.
+- [x] Frontend checks, Rust formatting/Clippy/tests, binding drift, dependency audit, and Windows/macOS CI builds pass.
 
 ## Out of Scope
 

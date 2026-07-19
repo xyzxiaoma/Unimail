@@ -13,7 +13,7 @@
 - [x] Add `storage_status` Tauri state/command, generated bindings, runtime decoder, and tests.
 - [x] Add encryption, wrong-key, migration, FTS5, repository, cursor atomicity, draft revision, and cleanup tests.
 - [x] Update Chinese changelog and code-backed Trellis storage/IPC specs.
-- [ ] Run Trellis quality review, native Windows build, and remote Windows/macOS CI.
+- [x] Run Trellis quality review, native Windows build, and remote Windows/macOS CI.
 
 ## Validation
 
