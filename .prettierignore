@@ -1,0 +1,14 @@
+dist
+target
+node_modules
+.agents
+.claude
+.codex
+.trellis
+doc
+src-tauri/gen
+src-tauri/icons
+src/lib/ipc/bindings.ts
+package-lock.json
+Cargo.lock
+*.svg

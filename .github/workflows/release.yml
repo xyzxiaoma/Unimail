@@ -1,0 +1,97 @@
+name: 标签发布候选
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: 校验发布标签
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:release-tag -- "${{ github.ref_name }}"
+
+  build-candidate:
+    name: 构建发布候选 (${{ matrix.os }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: release-candidate-windows-unsigned
+            paths: |
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/nsis/*.exe
+          - os: macos-latest
+            artifact: release-candidate-macos-unsigned
+            paths: |
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/macos/*.app
+              src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.app
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: 校验格式、类型、测试与 IPC 绑定
+        run: npm run ci:validate
+      - name: 构建未签名发布候选
+        run: npm run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ github.ref_name }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-draft:
+    name: 创建草稿 Release（显式启用后）
+    needs: build-candidate
+    if: vars.ENABLE_DRAFT_RELEASE == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 创建草稿 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mapfile -d '' files < <(find artifacts -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -print0)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "没有找到可附加到草稿 Release 的安装包。" >&2
+            exit 1
+          fi
+          gh release create "${{ github.ref_name }}" "${files[@]}" \
+            --draft \
+            --verify-tag \
+            --title "Unimail ${{ github.ref_name }}" \
+            --notes "签名、更新器元数据和正式发布流程尚未启用；请勿发布此草稿。"

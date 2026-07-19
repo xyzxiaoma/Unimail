@@ -1,0 +1,74 @@
+# Node and frontend build output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.vitest/
+*.tsbuildinfo
+.vite/
+
+# Rust and Tauri build output
+target/
+src-tauri/target/
+*.pdb
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.der
+*.pvk
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile
+*.jks
+*.keystore
+*.asc
+*.gpg
+*.sig
+*.secret
+*.secrets
+secrets/
+.secrets/
+
+# Local mail, database, cache, and log data
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.eml
+*.mbox
+maildata/
+cache/
+.cache/
+logs/
+*.log
+*.profraw
+
+# Platform and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# Local tooling state
+.tauri/
+.eslintcache
+.npm/
+.pnpm-store/

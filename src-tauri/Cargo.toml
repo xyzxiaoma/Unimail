@@ -1,0 +1,25 @@
+[package]
+name = "unimail"
+version.workspace = true
+description = "Unimail desktop application"
+authors = ["xyzxiaoma"]
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "unimail_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+doctest = false
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.11", features = [] }
+unimail-core = { path = "../crates/unimail-core" }
+
+[lints]
+workspace = true
