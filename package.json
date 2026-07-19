@@ -15,7 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "generate:bindings": "cargo run -p unimail-core --bin export-bindings",
-    "check:bindings": "npm run generate:bindings && git diff --exit-code -- src/lib/ipc/bindings.ts",
+    "check:bindings": "node scripts/check-bindings.mjs",
     "check:release-note": "node scripts/check-release-note.mjs",
     "check:paths": "node scripts/check-changed-paths.mjs",
     "check:changes": "npm run check:paths && npm run check:release-note",

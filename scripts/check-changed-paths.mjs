@@ -9,6 +9,8 @@ const FORBIDDEN = [
       /(?:^|\/)(?:dist|coverage|playwright-report|test-results|blob-report|maildata|cache|logs|secrets|\.secrets)\//u,
     reason: "生成、本地数据或密钥目录",
   },
+  { pattern: /^attachments\//u, reason: "本地附件缓存目录" },
+  { pattern: /\.init\.lock$/iu, reason: "本地数据库初始化锁文件" },
   { pattern: /(?:^|\/)\.env(?:\..+)?$/u, reason: "环境变量文件" },
   {
     pattern: /\.(?:db|sqlite|sqlite3)(?:-.+)?$|\.(?:eml|mbox)$/iu,

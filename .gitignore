@@ -51,8 +51,10 @@ secrets/
 maildata/
 cache/
 .cache/
+/attachments/
 logs/
 *.log
+*.init.lock
 *.profraw
 
 # Platform and editor files

@@ -52,8 +52,25 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 准备 Windows SQLCipher 构建依赖
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perlPath = (Get-Command perl -ErrorAction SilentlyContinue).Source
+          if (-not $perlPath) {
+            choco install strawberryperl --no-progress --yes
+            "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+            $perlPath = "C:\Strawberry\perl\bin\perl.exe"
+          }
+          & $perlPath -v
+
       - name: 安装前端依赖
         run: npm ci
+
+      - name: 审计生产前端依赖
+        run: npm audit --omit=dev
 
       - name: 校验变更路径与发布说明
         run: npm run check:changes

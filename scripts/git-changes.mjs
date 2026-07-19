@@ -46,11 +46,21 @@ export function changedFiles(argv = process.argv.slice(2)) {
     return lines(git(["diff", "--cached", "--name-only", "--diff-filter=ACMR"])).map(normalizePath);
 
   const positional = argv.filter((arg) => !arg.startsWith("--"));
-  const base = positional[0] ?? process.env.UNIMAIL_BASE_SHA ?? process.env.GITHUB_EVENT_BEFORE;
-  const head = positional[1] ?? process.env.UNIMAIL_HEAD_SHA ?? process.env.GITHUB_SHA ?? "HEAD";
+  const configuredBase =
+    positional[0] ?? process.env.UNIMAIL_BASE_SHA ?? process.env.GITHUB_EVENT_BEFORE;
+  const configuredHead = positional[1] ?? process.env.UNIMAIL_HEAD_SHA ?? process.env.GITHUB_SHA;
+  const head = configuredHead ?? "HEAD";
 
-  if (refExists(base)) {
-    return lines(git(["diff", "--name-only", "--diff-filter=ACMR", base, head])).map(normalizePath);
+  if (refExists(configuredBase)) {
+    return lines(git(["diff", "--name-only", "--diff-filter=ACMR", configuredBase, head])).map(
+      normalizePath,
+    );
+  }
+
+  if (configuredBase === undefined && configuredHead === undefined && refExists("HEAD")) {
+    const workingTree = lines(git(["diff", "HEAD", "--name-only", "--diff-filter=ACMR"]));
+    const untracked = lines(git(["ls-files", "--others", "--exclude-standard"]));
+    return [...new Set([...workingTree, ...untracked].map(normalizePath))];
   }
 
   if (refExists(head)) return rootFiles(head).map(normalizePath);

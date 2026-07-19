@@ -5,9 +5,10 @@ Unimail 是一个以简体中文为首发界面语言的跨平台桌面邮件客
 ## 环境要求
 
 - Node.js 22 与 npm
-- Rust stable，并安装 `rustfmt`、`clippy`
+- Rust 1.95 或更高版本，并安装 `rustfmt`、`clippy`
 - Tauri 2 对应平台的系统依赖
 - Windows 本地开发需要 Microsoft C++ Build Tools、Windows SDK 和 WebView2；请按 [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows) 配置
+- Windows 首次编译内置 SQLCipher/OpenSSL 还需要 Perl；推荐安装 Strawberry Perl，并确保 `perl` 在 `PATH` 中
 
 安装依赖：
 
