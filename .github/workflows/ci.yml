@@ -39,7 +39,7 @@ jobs:
       UNIMAIL_BASE_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
       UNIMAIL_HEAD_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
