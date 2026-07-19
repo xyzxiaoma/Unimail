@@ -3,7 +3,7 @@
   "name": "provider-contract-mime",
   "title": "Provider Contract and MIME",
   "description": "Implement shared provider/authentication contracts, MIME codec, fake-provider infrastructure, and conformance tests.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

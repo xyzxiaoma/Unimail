@@ -18,6 +18,7 @@ implemented integrations.
 | [Error Handling](./error-handling.md) | `application_info` and fallible `storage_status` IPC contracts | Storage established |
 | [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
+| [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, cursor safety, MIME budgets, fake conformance, and send ambiguity | Shared contract established |
 
 ## Pre-Development Checklist
 
@@ -26,13 +27,15 @@ Before changing backend code:
 1. Read [Directory Structure](./directory-structure.md) and the topic-specific guide.
 2. Inspect the real crate manifests and existing module nearest the change; do not infer
    provider behavior from marker functions or storage behavior from public names alone.
-3. For a Tauri command or DTO change, read the seven-section scenario in
+3. For provider, authentication, sync-page, MIME, attachment-stream, or send changes, read
+   [Provider and MIME Guidelines](./provider-guidelines.md) and run its conformance assertions.
+4. For a Tauri command or DTO change, read the seven-section scenario in
    [Error Handling](./error-handling.md), regenerate bindings, and update boundary tests.
-4. For storage work, keep SQL out of the UI and replace the deferred sections in
+5. For storage work, keep SQL out of the UI and replace the deferred sections in
    [Database Guidelines](./database-guidelines.md) only after schema code exists.
-5. Run the Rust quality commands in [Quality Guidelines](./quality-guidelines.md).
-6. If behavior is user-visible, update `CHANGELOG.zh-CN.md` under `未发布` in the same change.
-7. Never add credentials, mail data, databases, signing material, updater keys, or `.env`
+6. Run the Rust quality commands in [Quality Guidelines](./quality-guidelines.md).
+7. If behavior is user-visible, update `CHANGELOG.zh-CN.md` under `未发布` in the same change.
+8. Never add credentials, mail data, databases, signing material, updater keys, or `.env`
    files to source control.
 
 ## Primary References
