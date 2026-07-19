@@ -2,6 +2,8 @@
 
 mod domain;
 mod ids;
+mod mime;
+mod provider;
 mod storage;
 
 use serde::Serialize;
@@ -16,6 +18,22 @@ pub use domain::{
     SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey,
 };
 pub use ids::{AccountId, AttachmentId, DraftId, MailboxId, MessageId, OperationId};
+pub use mime::{
+    AttachmentContent, ComposedMessage, DeliveryEnvelope, MimeAddress, MimeAddressEntry,
+    MimeAddressRole, MimeAttachment, MimeBody, MimeCodec, MimeError, MimeErrorKind, MimeLimits,
+    NormalizedMimeMessage, OutboundAttachment, OutboundMessage, ReplyHeaders,
+};
+pub use provider::{
+    AcceptedSend, AccountAuthenticator, AttachmentDownload, AttachmentRequest, AttachmentSink,
+    AttachmentSinkError, AttachmentSinkFuture, AuthenticatedAccount, AuthorizationCodeLoginRequest,
+    Cancellation, CancellationFuture, CompleteLoginRequest, DurableCheckpoint, FetchBodyRequest,
+    IncrementalSyncRequest, InitialSyncLimit, InitialSyncRequest, LoginStart, MailProvider,
+    OpaqueProviderCursor, PageContinuation, ProviderError, ProviderErrorKind, ProviderFuture,
+    ProviderResult, ProviderRevision, ReadStateAck, ReconciliationKey, RejectedSend, RemoteChange,
+    RemoteMailbox, RemoteMailboxKey, RemoteMessage, RemoteMessageKey, RetryHint, SafeRequestId,
+    SendOutcome, SendRequest, SensitiveString, SetReadRequest, StartLoginRequest, SyncPage,
+    SyncPageState, UnknownSend,
+};
 pub use storage::{
     CredentialStore, CredentialStoreError, CredentialStoreKind, RepositoryError, RepositoryResult,
     SecretBytes, StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus,
