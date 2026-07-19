@@ -4,7 +4,7 @@
 
 ## Compiler and Lint Baseline
 
-The root [`Cargo.toml`](../../../Cargo.toml) defines Rust 1.88, edition 2024, resolver 2,
+The root [`Cargo.toml`](../../../Cargo.toml) defines Rust 1.95, edition 2024, resolver 2,
 and shared lints. Every workspace member must keep:
 
 ```toml
@@ -41,15 +41,18 @@ prerequisites are available.
   tests assert the exact capability whitelist and package version.
 - For every IPC DTO change, update Rust contract tests, frontend decoder tests, and the
   generated binding in one change.
-- Keep storage/provider markers compile-ready but do not write tests that pretend their
-  future behavior exists.
-- Tauri command logic should be thin enough to test through the core function. The Tauri
-  library currently sets `test = false`; do not cite nonexistent Tauri harness coverage.
+- Storage tests run against the actual bundled SQLCipher build. Provider markers remain
+  compile-ready until their implementation tasks establish real adapter contracts.
+- Tauri command logic should remain thin. Pure adapter mapping is covered by unit tests in the
+  Tauri library; platform setup, native credential prompts, and command round trips still require
+  native build or end-to-end verification.
 
 ## Generated Binding Rule
 
 `npm run generate:bindings` executes `cargo run -p unimail-core --bin export-bindings`.
-`npm run check:bindings` regenerates and fails if `src/lib/ipc/bindings.ts` differs.
+`npm run check:bindings` captures `src/lib/ipc/bindings.ts`, regenerates it, and fails if generation
+changes the captured content. This works for both committed CI checkouts and legitimate uncommitted
+DTO work; comparing only against `HEAD` would falsely reject every new binding before commit.
 
 Never manually patch the generated file. Change the Rust DTO/exporter, regenerate, inspect
 the diff, and retain frontend runtime decoding because the transport result remains
@@ -62,7 +65,7 @@ the diff, and retain frontend runtime decoding because the transport result rema
 - `serde_json::Value` or map-shaped command responses when a stable DTO exists.
 - Domain, storage, or provider logic in `src-tauri/src/main.rs` or a Tauri command wrapper.
 - Handwritten duplicate TypeScript DTOs for generated Rust contracts.
-- Claims that marker crates provide encryption, synchronization, or provider support.
+- Claims that provider markers provide synchronization or provider support.
 - New dependencies or abstractions without code and tests that use them.
 
 ## Review Checklist

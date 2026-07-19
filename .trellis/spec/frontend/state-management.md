@@ -9,6 +9,7 @@
 | Local interaction | `composeOpen` | `App` coordinates opening and closing the panel |
 | Local feedback | `syncMessage` | `App` updates status after the sync placeholder action |
 | IPC-derived metadata | `appInfo` | `App` loads typed `ApplicationInfo` once at startup |
+| IPC-derived storage health | `storageStatus` / status copy | `App` loads decoded `StorageStatus` and never fabricates readiness |
 | Static display data | `folders`, `iconPaths` | Module constants, not React state |
 
 Use `useState` for mutable view state and plain constants for immutable data. Compute

@@ -3,7 +3,7 @@
   "name": "encrypted-storage-domain",
   "title": "Encrypted Storage and Domain",
   "description": "Implement SQLCipher, OS credential storage, migrations, normalized mail domain, repositories, and typed IPC models.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

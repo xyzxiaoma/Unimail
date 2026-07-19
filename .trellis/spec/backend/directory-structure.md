@@ -8,7 +8,7 @@
 Cargo.toml
 crates/
 ├── unimail-core/       # Provider-neutral shared types and policy
-├── unimail-storage/    # Persistence adapter boundary; not implemented yet
+├── unimail-storage/    # SQLCipher, migrations, keyring, repositories, and cleanup recovery
 └── unimail-providers/  # Mail provider adapter boundary; not implemented yet
 src-tauri/
 ├── build.rs            # Tauri build integration only
@@ -24,15 +24,16 @@ lints with `[lints] workspace = true`.
 
 ## Module Responsibilities
 
-- `unimail-core` owns data that is safe to share across adapters. The current example is
-  `ApplicationInfo` and its capability whitelist in
+- `unimail-core` owns provider-neutral IDs, mail/domain records, repository and credential ports,
+  safe storage error/status DTOs, and application metadata. Its public exports are assembled in
   [`crates/unimail-core/src/lib.rs`](../../../crates/unimail-core/src/lib.rs).
-- `unimail-storage` will own persistence adapters. Its current `adapter_name()` function is
-  a compile-time marker, not a database implementation.
+- `unimail-storage` owns SQLCipher connection creation, schema migrations, native/fake credential
+  adapters, row mapping, FTS maintenance, repository transactions, and local cleanup recovery.
 - `unimail-providers` will own Gmail, Graph, IMAP, and SMTP adapters. Its current
   `adapter_family()` function is also only a marker.
-- `src-tauri` translates approved core operations into desktop IPC. Keep commands thin: the
-  existing `application_info()` delegates directly to `ApplicationInfo::current()`.
+- `src-tauri` translates approved core operations into desktop IPC. Keep commands thin:
+  `application_info()` delegates to core metadata and `storage_status()` delegates to the managed
+  repository without exposing initialization details.
 - `src-tauri/src/main.rs` calls `unimail_lib::run()` and contains no domain logic.
 
 ## Dependency Direction
@@ -53,6 +54,8 @@ contract by returning adapter-specific objects directly from a Tauri command.
 - Crates and Rust modules use lowercase kebab-case/snake_case according to Cargo/Rust
   conventions: `unimail-core`, `application_info`.
 - Shared serializable DTOs belong in `unimail-core`, not duplicated in `src-tauri`.
+- SQL, row tuples, keyring entries, database/cache paths, and secret values remain in
+  `unimail-storage` and never cross the Tauri boundary.
 - Tauri command registration stays explicit in `tauri::generate_handler![...]` in
   [`src-tauri/src/lib.rs`](../../../src-tauri/src/lib.rs).
 - Build-time binding export code lives in a named binary under

@@ -13,8 +13,11 @@ src/
 └── lib/
     └── ipc/
         ├── bindings.ts              # Generated Rust/Tauri types and invoke functions
+        ├── decode.ts                # Shared unknown-object boundary predicate
         ├── application-info.ts      # Runtime decoder and typed frontend facade
-        └── application-info.test.ts # Boundary decoder tests
+        ├── application-info.test.ts # Application metadata boundary tests
+        ├── storage-status.ts        # Encrypted-storage status/error decoder and facade
+        └── storage-status.test.ts   # Storage success/error/rejection boundary tests
 ```
 
 The current shell intentionally remains in `App.tsx`; do not describe feature folders or

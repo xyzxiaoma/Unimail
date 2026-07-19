@@ -5,16 +5,17 @@
 ## Overview
 
 The backend is a Rust workspace. Domain-safe shared types live in `unimail-core`; the
-Tauri crate is a thin desktop adapter. Storage and provider crates are compile-ready
-foundations only and must not be treated as implemented integrations.
+Tauri crate is a thin desktop adapter. Encrypted local storage is established in
+`unimail-storage`; provider crates remain compile-ready foundations and must not be treated as
+implemented integrations.
 
 ## Guidelines Index
 
 | Guide | Current scope | Status |
 | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | Workspace ownership and dependency direction | Foundation established |
-| [Database Guidelines](./database-guidelines.md) | Storage boundary and explicitly deferred database choices | Awaiting storage task |
-| [Error Handling](./error-handling.md) | Tauri command boundary and `application_info` contract | Foundation established |
+| [Database Guidelines](./database-guidelines.md) | SQLCipher, migrations, repositories, FTS, and cleanup recovery | Storage established |
+| [Error Handling](./error-handling.md) | `application_info` and fallible `storage_status` IPC contracts | Storage established |
 | [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
 
@@ -24,7 +25,7 @@ Before changing backend code:
 
 1. Read [Directory Structure](./directory-structure.md) and the topic-specific guide.
 2. Inspect the real crate manifests and existing module nearest the change; do not infer
-   storage or provider behavior from marker functions.
+   provider behavior from marker functions or storage behavior from public names alone.
 3. For a Tauri command or DTO change, read the seven-section scenario in
    [Error Handling](./error-handling.md), regenerate bindings, and update boundary tests.
 4. For storage work, keep SQL out of the UI and replace the deferred sections in
@@ -36,7 +37,7 @@ Before changing backend code:
 
 ## Primary References
 
-- [`Cargo.toml`](../../../Cargo.toml) defines workspace members, Rust 1.88, edition 2024,
+- [`Cargo.toml`](../../../Cargo.toml) defines workspace members, Rust 1.95, edition 2024,
   shared lints, and the workspace version.
 - [`crates/unimail-core/src/lib.rs`](../../../crates/unimail-core/src/lib.rs) is the current
   shared-domain example.

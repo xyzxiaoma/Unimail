@@ -17,7 +17,7 @@ store, React Query, and reusable custom hooks are not established yet.
 | [Component Guidelines](./component-guidelines.md) | Semantic components, accessibility, styling, and Chinese UI copy | Foundation established |
 | [Hook Guidelines](./hook-guidelines.md) | Built-in hook usage and explicitly deferred data-fetching patterns | Foundation established |
 | [State Management](./state-management.md) | Component-local state and IPC-derived state | Foundation established |
-| [Type Safety](./type-safety.md) | Strict TypeScript and the mandatory seven-section IPC scenario | Foundation established |
+| [Type Safety](./type-safety.md) | Strict TypeScript and application/storage IPC scenarios | Storage established |
 | [Quality Guidelines](./quality-guidelines.md) | Formatting, linting, tests, builds, and forbidden patterns | Foundation established |
 
 ## Pre-Development Checklist
@@ -44,6 +44,8 @@ Before changing frontend code:
 - [`src/App.css`](../../../src/App.css) defines the local system-font stack and shell styles.
 - [`src/lib/ipc/application-info.ts`](../../../src/lib/ipc/application-info.ts) owns runtime
   decoding of the generated IPC call.
+- [`src/lib/ipc/storage-status.ts`](../../../src/lib/ipc/storage-status.ts) owns encrypted-storage
+  success/error decoding and rejection preservation.
 - [`vite.config.ts`](../../../vite.config.ts), [`eslint.config.js`](../../../eslint.config.js),
   and [`tsconfig.json`](../../../tsconfig.json) define the current toolchain.
 - [`package.json`](../../../package.json) is the canonical command registry used by CI.

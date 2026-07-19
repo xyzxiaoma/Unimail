@@ -89,7 +89,7 @@ manually.
 | A required field is absent or has the wrong type | Frontend decoder throws `TypeError` |
 | Any capability is not a string | Frontend decoder throws `TypeError` |
 | `invoke` rejects | Promise remains rejected; do not fabricate fallback metadata |
-| Rust DTO changes but generated file is stale | `npm run check:bindings` fails on Git diff |
+| Rust DTO changes but generated file is stale | `npm run check:bindings` detects a generation-time content change |
 | Proposed metadata could reveal user/device secrets | Reject the field at review; do not serialize or log it |
 
 ### 5. Good / Base / Bad Cases
@@ -108,8 +108,8 @@ manually.
 - Frontend boundary test: accept a complete payload and assert the decoded object exactly.
 - Frontend boundary table test: reject null, missing fields, wrong scalar types, and
   non-string capability entries with `TypeError`.
-- Binding drift check: run `npm run check:bindings` and assert the committed generated file
-  is unchanged.
+- Binding drift check: run `npm run check:bindings` and assert regeneration does not change the
+  file content captured at command start.
 - Rust verification: run formatting, Clippy with denied warnings, and workspace tests as
   listed in [Quality Guidelines](./quality-guidelines.md).
 
@@ -140,6 +140,94 @@ fn application_info() -> ApplicationInfo {
 
 One core DTO is serialized by Tauri, exported to TypeScript, runtime-decoded by the
 frontend, and limited to an explicit safe-field whitelist.
+
+## Scenario: `storage_status` Tauri IPC Contract
+
+### 1. Scope / Trigger
+
+This scenario applies when storage initialization, `StorageStatus`, storage error taxonomy,
+command registration, generated bindings, or the status-bar consumer changes.
+
+### 2. Signatures
+
+```rust
+#[tauri::command]
+fn storage_status(
+    state: tauri::State<'_, StorageState>,
+) -> Result<StorageStatus, StorageCommandError>;
+```
+
+```typescript
+export function storageStatus(): Promise<unknown>;
+```
+
+The Tauri setup resolves the application data directory and initializes
+`SqlCipherRepository::initialize_with_native(data_dir.join("unimail.db"), identifier)`.
+
+### 3. Contracts
+
+Success has exactly these safe camel-case fields:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `ready` | `boolean` | `true` only after keyed open, probes, and migrations succeed |
+| `schemaVersion` | unsigned integer | Current latest schema version |
+| `cipherAvailable` | `boolean` | Derived from non-empty `cipher_version` |
+| `fts5Available` | `boolean` | Derived from a real create/insert/query probe |
+| `credentialStore` | `windows \| macos \| unsupported` | Backend kind only |
+
+Failure has exactly `code`, fixed Simplified Chinese `message`, and `retryable`. It never contains
+a database path, cache path, account, device identifier, key, credential value, SQL, or raw error.
+
+### 4. Validation & Error Matrix
+
+| Internal condition | Public code |
+| --- | --- |
+| Native credential backend unavailable | `credential_store_unavailable` |
+| Existing DB key entry missing | `database_key_unavailable` |
+| Existing DB rejects the supplied key | `database_key_invalid` |
+| Other database open/I/O failure | `database_open_failed` |
+| SQLCipher or FTS5 missing | `cipher_unavailable` / `fts5_unavailable` |
+| Migration failure | `migration_failed` |
+| SQLite/mutex busy | `storage_busy` |
+| Unfinished external cleanup | `cleanup_pending` |
+
+Recoverable command paths return `Result`; they never panic or serialize an internal error chain.
+
+### 5. Good / Base / Bad Cases
+
+- Good: a ready encrypted profile returns schema/capability metadata and the UI displays it.
+- Base: web preview or unavailable Tauri IPC remains usable but shows status unavailable; it does
+  not fabricate a ready payload.
+- Bad: returning `unimail.db`, a home-directory path, keyring entry name, SQLCipher diagnostic, or
+  `error.to_string()` across IPC.
+
+### 6. Tests Required
+
+- Core serialization tests assert camel-case status fields, snake-case codes, fixed messages, and
+  exact three-field errors.
+- Tauri adapter tests assert safe success passthrough and sanitized error mapping.
+- Binding exporter tests assert all storage DTOs and `Promise<unknown>` command generation.
+- Frontend decoder tests cover valid payloads, missing fields, wrong scalar types, invalid enums,
+  invalid errors, fixed-message/retryability drift, and rejected-command preservation.
+- UI tests mock the typed facade and assert ready/status copy by accessible text.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+#[tauri::command]
+fn storage_status() -> Result<StorageStatus, String> {
+    repository.health().map_err(|error| format!("{error:?}"))
+}
+```
+
+#### Correct
+
+```rust
+repository.health().map_err(StorageCommandError::from)
+```
 
 ## Common Mistakes
 

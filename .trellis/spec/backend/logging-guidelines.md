@@ -33,9 +33,10 @@ repository path after writing `src/lib/ipc/bindings.ts`. Tauri startup uses a fi
 
 ## Safe Foundation Metadata
 
-The `application_info` response is an allowlist, not a general diagnostic dump. Its current
-safe fields are application name, package version, OS family, and fixed capability labels.
-Adding a field requires the IPC contract review in [Error Handling](./error-handling.md).
+The `application_info` and `storage_status` responses are allowlists, not general diagnostic
+dumps. Storage status is limited to readiness, schema version, SQLCipher/FTS5 booleans, and native
+credential backend kind. Adding a field requires the IPC contract review in
+[Error Handling](./error-handling.md).
 
 ```rust
 // Wrong: debug output can expose future sensitive fields.

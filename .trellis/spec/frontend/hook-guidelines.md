@@ -6,7 +6,8 @@
 
 The foundation uses React's built-in hooks in [`src/App.tsx`](../../../src/App.tsx):
 
-- `useState` for compose visibility, application metadata, and sync feedback.
+- `useState` for compose visibility, application metadata, storage health/status copy, and sync
+  feedback.
 - `useEffect` for IPC startup work and window keyboard listeners, with cleanup.
 - `useId` to connect labels and headings to generated DOM identifiers.
 - `useRef` to return focus after closing the compose panel.
@@ -41,9 +42,9 @@ beside the hook.
 
 ## Data Fetching
 
-React Query, SWR, and any server-state cache are not installed or established. The only
-current asynchronous read is the typed `getApplicationInfo()` IPC facade called from an
-effect. Future mail synchronization must choose and document its cache/refresh contract in
+React Query, SWR, and any server-state cache are not installed or established. The current
+asynchronous reads are the typed `getApplicationInfo()` and `getStorageStatus()` IPC facades called
+from effects. Future mail synchronization must choose and document its cache/refresh contract in
 the implementing task; do not assume React Query conventions now.
 
 ## Forbidden Patterns

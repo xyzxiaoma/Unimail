@@ -63,7 +63,8 @@ facade; they do not import raw `invoke`, redefine the DTO, or cast payload field
 - [`application-info.test.ts`](../../../src/lib/ipc/application-info.test.ts) accepts one
   complete payload and rejects null, missing/wrong fields, and non-string capabilities.
 - UI tests mock the typed facade, not `@tauri-apps/api` internals.
-- `npm run check:bindings` regenerates the file and fails on Git drift.
+- `npm run check:bindings` regenerates the file and fails when generation changes its starting
+  content.
 - Run `npm run typecheck`, `npm run lint`, and `npm test` after boundary changes.
 
 ### 7. Wrong vs Correct Change
@@ -78,6 +79,79 @@ const info = await getApplicationInfo();
 
 A field change is incomplete until Rust DTO/serialization, generated bindings, decoder,
 tests, consumer behavior, and cross-layer documentation agree.
+
+## Mandatory Seven-Section Scenario: `storage_status`
+
+### 1. Scope / Trigger
+
+This applies to the storage command name, Rust DTOs/errors, generated declarations, runtime
+decoder, or any component that displays encrypted-storage state.
+
+### 2. Signature and Flow
+
+```text
+Rust StorageStatus / StorageCommandError
+  -> Tauri invoke
+  -> Promise<unknown>
+  -> decodeStorageStatus / decodeStorageCommandError
+  -> status-bar copy
+```
+
+Components import `getStorageStatus`; raw `invoke` remains private to generated bindings.
+
+### 3. Contract
+
+`StorageStatus` requires booleans `ready`, `cipherAvailable`, and `fts5Available`, an integer
+`schemaVersion` in the unsigned 32-bit range, and `credentialStore` equal to `windows`, `macos`,
+or `unsupported`.
+
+`StorageCommandError` requires a generated `StorageErrorCode` and the exact fixed safe message and
+retryability assigned to that code. The decoder returns only these allowlisted fields and rejects
+otherwise well-typed envelopes whose message or retryability drifts from the Rust contract.
+
+### 4. Runtime Validation and Errors
+
+| Runtime value | Behavior |
+| --- | --- |
+| Null, array, or scalar success | Throw `TypeError` |
+| Missing/wrong success field | Throw `TypeError` |
+| Fractional, negative, or >u32 schema version | Throw `TypeError` |
+| Unknown credential-store value | Throw `TypeError` |
+| Unknown code, non-fixed message, or mismatched retryability | Throw `TypeError` |
+| Generated invocation rejects | Preserve the rejection; never return a ready fallback |
+
+The React consumer may display a decoded fixed backend message. If the rejection itself is not a
+valid command error, it displays a generic Chinese unavailable message without logging payloads.
+
+### 5. Good / Base / Bad Cases
+
+- Good: `{ ready: true, schemaVersion: 1, cipherAvailable: true, fts5Available: true,
+  credentialStore: "windows" }` decodes and displays a ready state.
+- Base: browser preview rejects the command and the shell remains usable with unavailable status.
+- Bad: casting `await storageStatus()` to `StorageStatus`, displaying an arbitrary rejected value,
+  or inventing `{ ready: true }` after an IPC failure.
+
+### 6. Tests Required
+
+- Direct decoder tables cover valid, null, missing, wrong-type, range, and enum cases.
+- Error decoder tests reject unknown codes, path-bearing messages, and mismatched retryability.
+- `getStorageStatus` tests prove successful decoding and exact rejection preservation.
+- `App` tests mock the typed facade and assert the Simplified Chinese ready status.
+- Run binding drift, lint, typecheck, unit tests, and production frontend build.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const status = (await storageStatus()) as StorageStatus;
+```
+
+#### Correct
+
+```ts
+const status = decodeStorageStatus(await storageStatus());
+```
 
 ## Forbidden Patterns
 
