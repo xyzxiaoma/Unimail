@@ -106,8 +106,26 @@ jobs:
       - name: 运行 unimail-application 测试
         run: cargo test -p unimail-application
 
-      - name: 运行 unimail-providers 测试
-        run: cargo test -p unimail-providers
+      - name: 运行 Provider conformance 测试
+        run: "cargo test -p unimail-providers --lib conformance::"
+
+      - name: 运行 Gmail Provider 测试
+        run: "cargo test -p unimail-providers --lib gmail::"
+
+      - name: 运行 Graph HTTP 测试
+        run: "cargo test -p unimail-providers --lib graph::client::"
+
+      - name: 运行 Graph 凭据测试
+        run: "cargo test -p unimail-providers --lib graph::credential::"
+
+      - name: 运行 Graph OAuth 测试
+        run: "cargo test -p unimail-providers --lib graph::oauth::"
+
+      - name: 运行 Graph Provider 测试
+        run: "cargo test -p unimail-providers --lib graph::provider::"
+
+      - name: 运行共享 MIME 测试
+        run: "cargo test -p unimail-providers --lib mime::"
 
       - name: 运行 unimail 桌面端测试
         run: cargo test -p unimail
