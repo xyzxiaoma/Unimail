@@ -1,35 +1,39 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { gmailOnboardingCopy as copy } from "../../content/gmail-onboarding.zh-CN";
+import { onboardingCopy } from "../../content/oauth-onboarding.zh-CN";
 import {
-  cancelGmailOnboarding,
-  decodeGmailOnboardingCommandError,
-  getGmailOnboardingStatus,
-  startGmailOnboarding,
+  cancelOAuthOnboarding,
+  decodeOAuthOnboardingCommandError,
+  getOAuthOnboardingStatus,
+  startOAuthOnboarding,
   type ConnectedAccountSummary,
-  type GmailOnboardingStatus,
-} from "../../lib/ipc/gmail-onboarding";
+  type OAuthProvider,
+  type OAuthOnboardingStatus,
+} from "../../lib/ipc/oauth-onboarding";
 
 const pollIntervalMs = 750;
 
-type GmailOnboardingDialogProps = {
+type OAuthOnboardingDialogProps = {
+  initialProvider?: OAuthProvider;
   reconnectAccount: ConnectedAccountSummary | null;
   onClose: () => void;
   onConnected: (account: ConnectedAccountSummary) => void;
 };
 
-function isActive(status: GmailOnboardingStatus | null): boolean {
+function isActive(status: OAuthOnboardingStatus | null): boolean {
   return status?.state === "waiting_for_browser" || status?.state === "exchanging";
 }
 
-function safeErrorMessage(error: unknown): string {
+type ProviderCopy = ReturnType<typeof onboardingCopy>;
+
+function safeErrorMessage(error: unknown, copy: ProviderCopy): string {
   try {
-    return decodeGmailOnboardingCommandError(error).message;
+    return decodeOAuthOnboardingCommandError(error).message;
   } catch {
     return copy.genericUnavailable;
   }
 }
 
-function accountStateLabel(account: ConnectedAccountSummary): string {
+function accountStateLabel(account: ConnectedAccountSummary, copy: ProviderCopy): string {
   switch (account.authState) {
     case "connected":
       return copy.connected;
@@ -38,10 +42,13 @@ function accountStateLabel(account: ConnectedAccountSummary): string {
     case "unavailable":
       return copy.unavailable;
   }
-  throw new TypeError("未知 Gmail 账户状态");
+  throw new TypeError("未知 邮箱账户状态");
 }
 
-function statusContent(status: GmailOnboardingStatus | null): {
+function statusContent(
+  status: OAuthOnboardingStatus | null,
+  copy: ProviderCopy,
+): {
   title: string;
   body: string;
 } {
@@ -66,60 +73,67 @@ function statusContent(status: GmailOnboardingStatus | null): {
         body: status.error?.message ?? copy.genericUnavailable,
       };
   }
-  throw new TypeError("未知 Gmail 连接状态");
+  throw new TypeError("未知 邮箱连接状态");
 }
 
-export function GmailOnboardingDialog({
+export function OAuthOnboardingDialog({
+  initialProvider = "gmail",
   reconnectAccount,
   onClose,
   onConnected,
-}: GmailOnboardingDialogProps) {
+}: OAuthOnboardingDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const mountedRef = useRef(true);
   const commandPendingRef = useRef(false);
-  const [status, setStatus] = useState<GmailOnboardingStatus | null>(null);
+  const reconnectProvider =
+    reconnectAccount?.provider === "gmail" || reconnectAccount?.provider === "outlook"
+      ? reconnectAccount.provider
+      : null;
+  const [provider, setProvider] = useState<OAuthProvider>(reconnectProvider ?? initialProvider);
+  const [status, setStatus] = useState<OAuthOnboardingStatus | null>(null);
   const [commandPending, setCommandPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const copy = onboardingCopy(provider);
 
   const acceptStatus = useCallback(
-    (nextStatus: GmailOnboardingStatus) => {
-      if (!mountedRef.current) return;
+    (nextStatus: OAuthOnboardingStatus) => {
+      if (!mountedRef.current || nextStatus.provider !== provider) return;
       setStatus(nextStatus);
       setLocalError(null);
       if (nextStatus.state === "connected" && nextStatus.account) {
         onConnected(nextStatus.account);
       }
     },
-    [onConnected],
+    [onConnected, provider],
   );
 
   useEffect(() => {
     mountedRef.current = true;
     titleRef.current?.focus();
-    void getGmailOnboardingStatus()
+    void getOAuthOnboardingStatus(provider)
       .then(acceptStatus)
       .catch((error: unknown) => {
-        if (mountedRef.current) setLocalError(safeErrorMessage(error));
+        if (mountedRef.current) setLocalError(safeErrorMessage(error, copy));
       });
     return () => {
       mountedRef.current = false;
     };
-  }, [acceptStatus]);
+  }, [acceptStatus, copy, provider]);
 
   useEffect(() => {
     if (!isActive(status)) return;
     let active = true;
     let timer = 0;
     const poll = () => {
-      void getGmailOnboardingStatus()
+      void getOAuthOnboardingStatus(provider)
         .then((nextStatus) => {
           if (active) acceptStatus(nextStatus);
         })
         .catch((error: unknown) => {
-          if (active && mountedRef.current) setLocalError(safeErrorMessage(error));
+          if (active && mountedRef.current) setLocalError(safeErrorMessage(error, copy));
         })
         .finally(() => {
           if (active) timer = window.setTimeout(poll, pollIntervalMs);
@@ -130,7 +144,7 @@ export function GmailOnboardingDialog({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [acceptStatus, status]);
+  }, [acceptStatus, copy, provider, status]);
 
   const close = useCallback(async () => {
     if (commandPendingRef.current) return;
@@ -139,13 +153,13 @@ export function GmailOnboardingDialog({
     if (flowId) {
       setCommandPending(true);
       try {
-        await cancelGmailOnboarding(flowId);
+        await cancelOAuthOnboarding(provider, flowId);
       } catch {
         // Closing must remain available even if desktop IPC is no longer reachable.
       }
     }
     if (mountedRef.current) onClose();
-  }, [onClose, status]);
+  }, [onClose, provider, status]);
 
   useEffect(() => {
     const handleDialogKeys = (event: KeyboardEvent) => {
@@ -181,9 +195,9 @@ export function GmailOnboardingDialog({
     setCommandPending(true);
     setLocalError(null);
     try {
-      acceptStatus(await startGmailOnboarding(reconnectAccount?.id ?? null));
+      acceptStatus(await startOAuthOnboarding(provider, reconnectAccount?.id ?? null));
     } catch (error: unknown) {
-      if (mountedRef.current) setLocalError(safeErrorMessage(error));
+      if (mountedRef.current) setLocalError(safeErrorMessage(error, copy));
     } finally {
       commandPendingRef.current = false;
       if (mountedRef.current) setCommandPending(false);
@@ -196,17 +210,18 @@ export function GmailOnboardingDialog({
     setCommandPending(true);
     setLocalError(null);
     try {
-      acceptStatus(await cancelGmailOnboarding(status.flowId));
+      acceptStatus(await cancelOAuthOnboarding(provider, status.flowId));
     } catch (error: unknown) {
-      if (mountedRef.current) setLocalError(safeErrorMessage(error));
+      if (mountedRef.current) setLocalError(safeErrorMessage(error, copy));
     } finally {
       commandPendingRef.current = false;
       if (mountedRef.current) setCommandPending(false);
     }
   };
 
-  const content = statusContent(status);
-  const connectedAccount = status?.account ?? reconnectAccount;
+  const content = statusContent(status, copy);
+  const connectedAccount =
+    status?.account ?? (reconnectAccount?.provider === provider ? reconnectAccount : null);
   const canStart =
     status?.state === "idle" ||
     status?.state === "connected" ||
@@ -214,16 +229,16 @@ export function GmailOnboardingDialog({
     status?.state === "failed";
 
   return (
-    <div className="gmail-dialog-backdrop">
+    <div className="oauth-dialog-backdrop">
       <div
         aria-describedby={descriptionId}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="gmail-dialog"
+        className="oauth-dialog"
         ref={dialogRef}
         role="dialog"
       >
-        <header className="gmail-dialog-header">
+        <header className="oauth-dialog-header">
           <div>
             <p className="eyebrow">{copy.eyebrow}</p>
             <h2 id={titleId} ref={titleRef} tabIndex={-1}>
@@ -232,7 +247,7 @@ export function GmailOnboardingDialog({
           </div>
           <button
             aria-label={copy.close}
-            className="icon-button gmail-close-button"
+            className="icon-button oauth-close-button"
             disabled={commandPending}
             onClick={() => void close()}
             type="button"
@@ -241,13 +256,32 @@ export function GmailOnboardingDialog({
           </button>
         </header>
 
-        <p className="gmail-dialog-introduction" id={descriptionId}>
+        <p className="oauth-dialog-introduction" id={descriptionId}>
           {copy.introduction}
         </p>
 
-        <section aria-live="polite" aria-busy={commandPending} className="gmail-status-card">
-          <span aria-hidden="true" className={`gmail-status-mark ${status?.state ?? "loading"}`}>
-            G
+        {!reconnectAccount && !isActive(status) && (
+          <div aria-label="选择邮箱提供商" className="oauth-provider-choice" role="group">
+            {(["gmail", "outlook"] as const).map((candidate) => (
+              <button
+                aria-pressed={provider === candidate}
+                disabled={commandPending}
+                key={candidate}
+                onClick={() => {
+                  setLocalError(null);
+                  setProvider(candidate);
+                }}
+                type="button"
+              >
+                {onboardingCopy(candidate).providerName}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <section aria-live="polite" aria-busy={commandPending} className="oauth-status-card">
+          <span aria-hidden="true" className={`oauth-status-mark ${status?.state ?? "loading"}`}>
+            {copy.mark}
           </span>
           <div>
             <h3>{content.title}</h3>
@@ -256,19 +290,19 @@ export function GmailOnboardingDialog({
         </section>
 
         {connectedAccount && (
-          <section className="gmail-account-summary" aria-labelledby={`${titleId}-account`}>
+          <section className="oauth-account-summary" aria-labelledby={`${titleId}-account`}>
             <div>
               <h3 id={`${titleId}-account`}>{copy.connectedAccountsHeading}</h3>
               <strong>{connectedAccount.displayName ?? connectedAccount.email}</strong>
               <span>{connectedAccount.email}</span>
             </div>
-            <span className="gmail-account-state">{accountStateLabel(connectedAccount)}</span>
+            <span className="oauth-account-state">{accountStateLabel(connectedAccount, copy)}</span>
           </section>
         )}
 
-        <p className="gmail-privacy-note">{copy.privacyNote}</p>
+        <p className="oauth-privacy-note">{copy.privacyNote}</p>
 
-        <footer className="gmail-dialog-actions">
+        <footer className="oauth-dialog-actions">
           {isActive(status) ? (
             <button disabled={commandPending} onClick={() => void cancel()} type="button">
               {copy.cancel}
@@ -280,7 +314,7 @@ export function GmailOnboardingDialog({
           )}
           {canStart && (
             <button
-              className="gmail-primary-action"
+              className="oauth-primary-action"
               disabled={commandPending}
               onClick={() => void start()}
               type="button"

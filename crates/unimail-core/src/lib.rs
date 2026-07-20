@@ -32,8 +32,8 @@ pub use mime::{
     NormalizedMimeMessage, OutboundAttachment, OutboundMessage, ReplyHeaders,
 };
 pub use onboarding::{
-    ConnectedAccountSummary, GmailOnboardingCommandError, GmailOnboardingErrorCode,
-    GmailOnboardingState, GmailOnboardingStatus,
+    ConnectedAccountSummary, OAuthOnboardingCommandError, OAuthOnboardingErrorCode,
+    OAuthOnboardingState, OAuthOnboardingStatus,
 };
 pub use provider::{
     AcceptedSend, AccountAuthenticator, AttachmentDownload, AttachmentRequest, AttachmentSink,

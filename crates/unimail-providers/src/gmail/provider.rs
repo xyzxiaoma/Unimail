@@ -1557,6 +1557,7 @@ mod tests {
             SendRequest {
                 account_id,
                 provider_thread_id: Some("thread-1".to_owned()),
+                original_provider_message_id: Some("ignored-by-gmail".to_owned()),
                 message: ComposedMessage::new(
                     bytes.clone(),
                     "outbound@example.com".to_owned(),

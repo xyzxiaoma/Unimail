@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { getConnectedAccounts, getGmailOnboardingStatus } from "./lib/ipc/gmail-onboarding";
+import { getConnectedAccounts, getOAuthOnboardingStatus } from "./lib/ipc/oauth-onboarding";
 import { decodeStorageCommandError, getStorageStatus } from "./lib/ipc/storage-status";
 
 vi.mock("./lib/ipc/application-info", () => ({
@@ -13,20 +13,20 @@ vi.mock("./lib/ipc/storage-status", () => ({
   getStorageStatus: vi.fn(),
 }));
 
-vi.mock("./lib/ipc/gmail-onboarding", () => ({
-  cancelGmailOnboarding: vi.fn(),
-  decodeGmailOnboardingCommandError: vi.fn(() => {
+vi.mock("./lib/ipc/oauth-onboarding", () => ({
+  cancelOAuthOnboarding: vi.fn(),
+  decodeOAuthOnboardingCommandError: vi.fn(() => {
     throw new TypeError("invalid test rejection");
   }),
   getConnectedAccounts: vi.fn(),
-  getGmailOnboardingStatus: vi.fn(),
-  startGmailOnboarding: vi.fn(),
+  getOAuthOnboardingStatus: vi.fn(),
+  startOAuthOnboarding: vi.fn(),
 }));
 
 const mockedDecodeStorageCommandError = vi.mocked(decodeStorageCommandError);
 const mockedGetStorageStatus = vi.mocked(getStorageStatus);
 const mockedGetConnectedAccounts = vi.mocked(getConnectedAccounts);
-const mockedGetGmailOnboardingStatus = vi.mocked(getGmailOnboardingStatus);
+const mockedGetOAuthOnboardingStatus = vi.mocked(getOAuthOnboardingStatus);
 
 describe("Unimail 基础界面", () => {
   beforeEach(() => {
@@ -39,13 +39,16 @@ describe("Unimail 基础界面", () => {
     });
     mockedGetConnectedAccounts.mockReset();
     mockedGetConnectedAccounts.mockResolvedValue([]);
-    mockedGetGmailOnboardingStatus.mockReset();
-    mockedGetGmailOnboardingStatus.mockResolvedValue({
-      state: "idle",
-      flowId: null,
-      account: null,
-      error: null,
-    });
+    mockedGetOAuthOnboardingStatus.mockReset();
+    mockedGetOAuthOnboardingStatus.mockImplementation((provider) =>
+      Promise.resolve({
+        provider,
+        state: "idle",
+        flowId: null,
+        account: null,
+        error: null,
+      }),
+    );
   });
 
   afterEach(() => {
@@ -95,10 +98,10 @@ describe("Unimail 基础界面", () => {
     render(<App />);
 
     expect(await screen.findByText("Gmail 账户需要重新连接")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新连接 Gmail" })).toBeTruthy();
+    expect(screen.getByText("重新连接 Gmail")).toBeTruthy();
   });
 
-  it("两个添加账户入口都打开 Gmail 对话框", async () => {
+  it("两个添加账户入口都打开 邮箱连接对话框", async () => {
     const { unmount } = render(<App />);
 
     fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
@@ -110,7 +113,7 @@ describe("Unimail 基础界面", () => {
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
   });
 
-  it("Gmail 对话框响应 Escape 并把焦点还给入口", async () => {
+  it("邮箱连接对话框响应 Escape 并把焦点还给入口", async () => {
     render(<App />);
     const opener = screen.getByRole("button", { name: "开始设置" });
     fireEvent.click(opener);
@@ -121,7 +124,7 @@ describe("Unimail 基础界面", () => {
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
-  it("Gmail 对话框打开时不会响应写邮件快捷键", async () => {
+  it("邮箱连接对话框打开时不会响应写邮件快捷键", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();

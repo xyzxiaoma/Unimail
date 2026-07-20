@@ -9,16 +9,16 @@ use unimail_application::{CoordinatorError, RunOutcome, SyncCoordinator};
 use unimail_core::{
     Account, AccountAuthenticator, AccountConnectInput, AccountConnectResult, AccountId,
     AuthenticatedAccount, CompleteLoginRequest, ConnectedAccountSummary, CredentialRef,
-    CredentialStore, GmailOnboardingCommandError, GmailOnboardingErrorCode, GmailOnboardingState,
-    GmailOnboardingStatus, InitialSyncLimit, LoginStart, Provider, ProviderError,
+    CredentialStore, InitialSyncLimit, LoginStart, OAuthOnboardingCommandError,
+    OAuthOnboardingErrorCode, OAuthOnboardingState, OAuthOnboardingStatus, Provider, ProviderError,
     ProviderErrorKind, RepositoryError, StartLoginRequest, StorageRepository, SyncMode,
     SyncTrigger,
 };
-use unimail_providers::gmail::GmailAccountRegistry;
+use unimail_providers::{gmail::GmailAccountRegistry, graph::GraphAccountRegistry};
 
 use crate::oauth::{
     BrowserOpener, DesktopCancellation, FLOW_TIMEOUT, LoopbackError, LoopbackReceiver,
-    oauth_state_from_authorization_url,
+    RedirectHost, oauth_state_from_authorization_url,
 };
 
 type DesktopFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -176,7 +176,7 @@ impl InitialSyncScheduler for CoordinatorScheduler {
     }
 }
 
-trait AccountRegistry: Send + Sync {
+pub(crate) trait AccountRegistry: Send + Sync {
     fn register(&self, account_id: AccountId, credential_ref: CredentialRef) -> Result<(), ()>;
     fn remove(&self, account_id: AccountId) -> Result<(), ()>;
 }
@@ -191,6 +191,16 @@ impl AccountRegistry for GmailAccountRegistry {
     }
 }
 
+impl AccountRegistry for GraphAccountRegistry {
+    fn register(&self, account_id: AccountId, credential_ref: CredentialRef) -> Result<(), ()> {
+        GraphAccountRegistry::register(self, account_id, credential_ref).map_err(|_| ())
+    }
+
+    fn remove(&self, account_id: AccountId) -> Result<(), ()> {
+        GraphAccountRegistry::remove(self, account_id).map_err(|_| ())
+    }
+}
+
 struct ActiveFlow {
     flow_id: String,
     cancellation: Arc<DesktopCancellation>,
@@ -201,7 +211,16 @@ struct ReconnectTarget {
     email: String,
 }
 
-pub(crate) struct GmailOAuthSessionManager {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OAuthSessionConfig {
+    pub(crate) provider: Provider,
+    pub(crate) redirect_host: RedirectHost,
+    pub(crate) configured: bool,
+}
+
+pub(crate) struct OAuthSessionManager {
+    provider: Provider,
+    redirect_host: RedirectHost,
     configured: bool,
     authenticator: Arc<dyn DesktopAuthenticator>,
     accounts: Arc<dyn AccountBackend>,
@@ -209,29 +228,30 @@ pub(crate) struct GmailOAuthSessionManager {
     registry: Arc<dyn AccountRegistry>,
     scheduler: Arc<dyn InitialSyncScheduler>,
     browser: Arc<dyn BrowserOpener>,
-    status: Mutex<GmailOnboardingStatus>,
+    status: Mutex<OAuthOnboardingStatus>,
     active: Mutex<Option<ActiveFlow>>,
     start_lock: tokio::sync::Mutex<()>,
 }
 
-impl GmailOAuthSessionManager {
-    pub(crate) fn new<A>(
-        configured: bool,
+impl OAuthSessionManager {
+    pub(crate) fn new<A, R>(
+        config: OAuthSessionConfig,
         authenticator: Arc<A>,
         repository: Arc<dyn StorageRepository>,
         credentials: Arc<dyn CredentialStore>,
-        registry: Arc<GmailAccountRegistry>,
+        registry: Arc<R>,
         coordinator: Arc<SyncCoordinator>,
         browser: Arc<dyn BrowserOpener>,
     ) -> Self
     where
         A: AccountAuthenticator + 'static,
+        R: AccountRegistry + 'static,
     {
         let authenticator: Arc<dyn DesktopAuthenticator> = authenticator;
         let accounts: Arc<dyn AccountBackend> = Arc::new(RepositoryAccountBackend::new(repository));
         let registry: Arc<dyn AccountRegistry> = registry;
         Self::from_parts(
-            configured,
+            config,
             authenticator,
             Arc::clone(&accounts),
             credentials,
@@ -242,7 +262,7 @@ impl GmailOAuthSessionManager {
     }
 
     fn from_parts(
-        configured: bool,
+        config: OAuthSessionConfig,
         authenticator: Arc<dyn DesktopAuthenticator>,
         accounts: Arc<dyn AccountBackend>,
         credentials: Arc<dyn CredentialStore>,
@@ -251,28 +271,33 @@ impl GmailOAuthSessionManager {
         browser: Arc<dyn BrowserOpener>,
     ) -> Self {
         Self {
-            configured,
+            provider: config.provider,
+            redirect_host: config.redirect_host,
+            configured: config.configured,
             authenticator,
             accounts,
             credentials,
             registry,
             scheduler,
             browser,
-            status: Mutex::new(GmailOnboardingStatus::initial(configured)),
+            status: Mutex::new(OAuthOnboardingStatus::initial(
+                config.provider,
+                config.configured,
+            )),
             active: Mutex::new(None),
             start_lock: tokio::sync::Mutex::new(()),
         }
     }
 
-    pub(crate) fn status(&self) -> GmailOnboardingStatus {
+    pub(crate) fn status(&self) -> OAuthOnboardingStatus {
         self.status
             .lock()
-            .map_or_else(|_| internal_status(), |status| status.clone())
+            .map_or_else(|_| internal_status(self.provider), |status| status.clone())
     }
 
     pub(crate) async fn connected_accounts(
         &self,
-    ) -> Result<Vec<ConnectedAccountSummary>, GmailOnboardingCommandError> {
+    ) -> Result<Vec<ConnectedAccountSummary>, OAuthOnboardingCommandError> {
         self.accounts
             .list()
             .await
@@ -280,31 +305,34 @@ impl GmailOAuthSessionManager {
                 accounts
                     .iter()
                     .filter(|account| {
-                        account.provider == Provider::Gmail && account.enabled && !account.deleting
+                        account.provider == self.provider && account.enabled && !account.deleting
                     })
                     .map(ConnectedAccountSummary::from)
                     .collect()
             })
-            .map_err(|_| command_error(GmailOnboardingErrorCode::StorageUnavailable))
+            .map_err(|_| command_error(self.provider, OAuthOnboardingErrorCode::StorageUnavailable))
     }
 
     pub(crate) async fn start(
         self: &Arc<Self>,
         account_id: Option<String>,
-    ) -> GmailOnboardingStatus {
+    ) -> OAuthOnboardingStatus {
         let _guard = self.start_lock.lock().await;
         if !self.configured {
-            return self.set_status(GmailOnboardingStatus::initial(false));
+            return self.set_status(OAuthOnboardingStatus::initial(self.provider, false));
         }
         self.cancel_active(None, false);
 
         let reconnect = match self.reconnect_target(account_id).await {
             Ok(target) => target,
-            Err(code) => return self.set_status(failed_status(code, None, None)),
+            Err(code) => {
+                return self.set_status(failed_status(self.provider, code, None, None));
+            }
         };
-        let Ok(receiver) = LoopbackReceiver::bind().await else {
+        let Ok(receiver) = LoopbackReceiver::bind_for(self.redirect_host).await else {
             return self.set_status(failed_status(
-                GmailOnboardingErrorCode::ProviderUnavailable,
+                self.provider,
+                OAuthOnboardingErrorCode::ProviderUnavailable,
                 None,
                 None,
             ));
@@ -314,7 +342,7 @@ impl GmailOAuthSessionManager {
             .authenticator
             .start(
                 StartLoginRequest {
-                    provider: Provider::Gmail,
+                    provider: self.provider,
                     redirect_uri: receiver.redirect_uri(),
                 },
                 cancellation.as_ref(),
@@ -323,21 +351,27 @@ impl GmailOAuthSessionManager {
         let login = match start {
             Ok(login) => login,
             Err(error) => {
-                return self.set_status(failed_status(map_provider_error(&error), None, None));
+                return self.set_status(failed_status(
+                    self.provider,
+                    map_provider_error(&error),
+                    None,
+                    None,
+                ));
             }
         };
         let Some(expected_state) = oauth_state_from_authorization_url(&login.authorization_url)
         else {
             cancellation.cancel();
             return self.set_status(failed_status(
-                GmailOnboardingErrorCode::AuthenticationFailed,
+                self.provider,
+                OAuthOnboardingErrorCode::AuthenticationFailed,
                 None,
                 None,
             ));
         };
         {
             let Ok(mut active) = self.active_lock() else {
-                return self.set_status(internal_status());
+                return self.set_status(internal_status(self.provider));
             };
             *active = Some(ActiveFlow {
                 flow_id: login.flow_id.clone(),
@@ -348,13 +382,15 @@ impl GmailOAuthSessionManager {
             cancellation.cancel();
             self.clear_active_if(&login.flow_id);
             return self.set_status(failed_status(
-                GmailOnboardingErrorCode::BrowserOpenFailed,
+                self.provider,
+                OAuthOnboardingErrorCode::BrowserOpenFailed,
                 Some(login.flow_id),
                 None,
             ));
         }
-        let waiting = GmailOnboardingStatus {
-            state: GmailOnboardingState::WaitingForBrowser,
+        let waiting = OAuthOnboardingStatus {
+            provider: self.provider,
+            state: OAuthOnboardingState::WaitingForBrowser,
             flow_id: Some(login.flow_id.clone()),
             account: None,
             error: None,
@@ -369,14 +405,14 @@ impl GmailOAuthSessionManager {
         waiting
     }
 
-    pub(crate) fn cancel(&self, flow_id: &str) -> GmailOnboardingStatus {
+    pub(crate) fn cancel(&self, flow_id: &str) -> OAuthOnboardingStatus {
         self.cancel_active(Some(flow_id), true);
         self.status()
     }
 
     pub(crate) fn restore_registry(&self, accounts: &[Account]) -> Result<(), ()> {
         for account in accounts.iter().filter(|account| {
-            account.provider == Provider::Gmail
+            account.provider == self.provider
                 && account.enabled
                 && !account.deleting
                 && account.auth_state == unimail_core::AccountAuthState::Connected
@@ -390,19 +426,19 @@ impl GmailOAuthSessionManager {
     async fn reconnect_target(
         &self,
         account_id: Option<String>,
-    ) -> Result<Option<ReconnectTarget>, GmailOnboardingErrorCode> {
+    ) -> Result<Option<ReconnectTarget>, OAuthOnboardingErrorCode> {
         let Some(raw) = account_id else {
             return Ok(None);
         };
         let account_id =
-            AccountId::from_str(&raw).map_err(|_| GmailOnboardingErrorCode::CallbackInvalid)?;
+            AccountId::from_str(&raw).map_err(|_| OAuthOnboardingErrorCode::CallbackInvalid)?;
         let account = self
             .accounts
             .get(account_id)
             .await
-            .map_err(|_| GmailOnboardingErrorCode::StorageUnavailable)?
-            .filter(|account| account.provider == Provider::Gmail)
-            .ok_or(GmailOnboardingErrorCode::StorageUnavailable)?;
+            .map_err(|_| OAuthOnboardingErrorCode::StorageUnavailable)?
+            .filter(|account| account.provider == self.provider)
+            .ok_or(OAuthOnboardingErrorCode::StorageUnavailable)?;
         Ok(Some(ReconnectTarget {
             account_id,
             email: normalize_email(&account.email),
@@ -429,8 +465,9 @@ impl GmailOAuthSessionManager {
         };
         if !self.set_status_if_active(
             &login.flow_id,
-            GmailOnboardingStatus {
-                state: GmailOnboardingState::Exchanging,
+            OAuthOnboardingStatus {
+                provider: self.provider,
+                state: OAuthOnboardingState::Exchanging,
                 flow_id: Some(login.flow_id.clone()),
                 account: None,
                 error: None,
@@ -459,7 +496,7 @@ impl GmailOAuthSessionManager {
             self.delete_credential(authenticated.credential_ref).await;
             return;
         }
-        if authenticated.provider != Provider::Gmail
+        if authenticated.provider != self.provider
             || reconnect.as_ref().is_some_and(|target| {
                 normalize_email(&authenticated.account_address) != target.email
             })
@@ -467,7 +504,7 @@ impl GmailOAuthSessionManager {
             self.delete_credential(authenticated.credential_ref).await;
             self.finish_with_error(
                 &login.flow_id,
-                GmailOnboardingErrorCode::AuthenticationFailed,
+                OAuthOnboardingErrorCode::AuthenticationFailed,
             );
             return;
         }
@@ -484,8 +521,9 @@ impl GmailOAuthSessionManager {
         let summary = ConnectedAccountSummary::from(&connected.account);
         self.finish_status(
             &login.flow_id,
-            GmailOnboardingStatus {
-                state: GmailOnboardingState::Connected,
+            OAuthOnboardingStatus {
+                provider: self.provider,
+                state: OAuthOnboardingState::Connected,
                 flow_id: None,
                 account: Some(summary),
                 error: None,
@@ -498,11 +536,11 @@ impl GmailOAuthSessionManager {
         authenticated: AuthenticatedAccount,
         reconnect: Option<&ReconnectTarget>,
         cancellation: &DesktopCancellation,
-    ) -> Result<AccountConnectResult, GmailOnboardingErrorCode> {
+    ) -> Result<AccountConnectResult, OAuthOnboardingErrorCode> {
         let credential_ref = authenticated.credential_ref.clone();
         let input = AccountConnectInput {
             id: reconnect.map_or_else(AccountId::new, |target| target.account_id),
-            provider: Provider::Gmail,
+            provider: self.provider,
             email: normalize_email(&authenticated.account_address),
             display_name: authenticated.display_name,
             credential_ref: credential_ref.clone(),
@@ -510,7 +548,7 @@ impl GmailOAuthSessionManager {
         };
         let Ok(connected) = self.accounts.connect(input).await else {
             self.delete_credential(credential_ref).await;
-            return Err(GmailOnboardingErrorCode::StorageUnavailable);
+            return Err(OAuthOnboardingErrorCode::StorageUnavailable);
         };
         if self
             .registry
@@ -520,7 +558,7 @@ impl GmailOAuthSessionManager {
             )
             .is_err()
         {
-            return Err(GmailOnboardingErrorCode::Internal);
+            return Err(OAuthOnboardingErrorCode::Internal);
         }
         if let Some(replaced) = connected.replaced_credential_ref.clone()
             && replaced != connected.account.credential_ref
@@ -533,7 +571,7 @@ impl GmailOAuthSessionManager {
             .await
             .is_err()
         {
-            return Err(GmailOnboardingErrorCode::StorageUnavailable);
+            return Err(OAuthOnboardingErrorCode::StorageUnavailable);
         }
         Ok(connected)
     }
@@ -543,11 +581,14 @@ impl GmailOAuthSessionManager {
         let _ = tokio::task::spawn_blocking(move || credentials.delete(&reference)).await;
     }
 
-    fn finish_with_error(&self, flow_id: &str, code: GmailOnboardingErrorCode) {
-        self.finish_status(flow_id, failed_status(code, Some(flow_id.to_owned()), None));
+    fn finish_with_error(&self, flow_id: &str, code: OAuthOnboardingErrorCode) {
+        self.finish_status(
+            flow_id,
+            failed_status(self.provider, code, Some(flow_id.to_owned()), None),
+        );
     }
 
-    fn finish_status(&self, flow_id: &str, status: GmailOnboardingStatus) {
+    fn finish_status(&self, flow_id: &str, status: OAuthOnboardingStatus) {
         if self.clear_active_if(flow_id) {
             self.set_status(status);
         }
@@ -570,7 +611,8 @@ impl GmailOAuthSessionManager {
         active.cancellation.cancel();
         if expose_cancelled {
             self.set_status(failed_status(
-                GmailOnboardingErrorCode::Cancelled,
+                self.provider,
+                OAuthOnboardingErrorCode::Cancelled,
                 Some(active.flow_id),
                 None,
             ));
@@ -593,7 +635,7 @@ impl GmailOAuthSessionManager {
         }
     }
 
-    fn set_status_if_active(&self, flow_id: &str, status: GmailOnboardingStatus) -> bool {
+    fn set_status_if_active(&self, flow_id: &str, status: OAuthOnboardingStatus) -> bool {
         let is_active = self.is_active(flow_id);
         if is_active {
             self.set_status(status);
@@ -608,12 +650,12 @@ impl GmailOAuthSessionManager {
             .unwrap_or(false)
     }
 
-    fn set_status(&self, status: GmailOnboardingStatus) -> GmailOnboardingStatus {
+    fn set_status(&self, status: OAuthOnboardingStatus) -> OAuthOnboardingStatus {
         if let Ok(mut current) = self.status.lock() {
             status.clone_into(&mut current);
             status
         } else {
-            internal_status()
+            internal_status(self.provider)
         }
     }
 
@@ -634,73 +676,82 @@ fn current_time_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn map_loopback_error(error: LoopbackError) -> GmailOnboardingErrorCode {
+fn map_loopback_error(error: LoopbackError) -> OAuthOnboardingErrorCode {
     match error {
-        LoopbackError::Cancelled => GmailOnboardingErrorCode::Cancelled,
-        LoopbackError::Timeout => GmailOnboardingErrorCode::TimedOut,
+        LoopbackError::Cancelled => OAuthOnboardingErrorCode::Cancelled,
+        LoopbackError::Timeout => OAuthOnboardingErrorCode::TimedOut,
         LoopbackError::Bind | LoopbackError::Accept | LoopbackError::WriteResponse => {
-            GmailOnboardingErrorCode::ProviderUnavailable
+            OAuthOnboardingErrorCode::ProviderUnavailable
         }
         LoopbackError::InvalidRequest
         | LoopbackError::OversizedRequest
         | LoopbackError::WrongMethod
         | LoopbackError::WrongPath
-        | LoopbackError::WrongState => GmailOnboardingErrorCode::CallbackInvalid,
+        | LoopbackError::WrongState => OAuthOnboardingErrorCode::CallbackInvalid,
     }
 }
 
-fn map_provider_error(error: &ProviderError) -> GmailOnboardingErrorCode {
+fn map_provider_error(error: &ProviderError) -> OAuthOnboardingErrorCode {
     match error.code {
-        "gmail_not_configured" => GmailOnboardingErrorCode::NotConfigured,
-        "gmail_authorization_denied" => GmailOnboardingErrorCode::AuthorizationDenied,
-        "gmail_oauth_flow_expired" => GmailOnboardingErrorCode::TimedOut,
+        "gmail_not_configured" | "graph_not_configured" => OAuthOnboardingErrorCode::NotConfigured,
+        "gmail_authorization_denied" | "graph_authorization_denied" => {
+            OAuthOnboardingErrorCode::AuthorizationDenied
+        }
+        "gmail_oauth_flow_expired" | "graph_oauth_flow_expired" => {
+            OAuthOnboardingErrorCode::TimedOut
+        }
         _ => match error.kind {
-            ProviderErrorKind::Cancelled => GmailOnboardingErrorCode::Cancelled,
+            ProviderErrorKind::Cancelled => OAuthOnboardingErrorCode::Cancelled,
             ProviderErrorKind::Authentication | ProviderErrorKind::Permission => {
-                GmailOnboardingErrorCode::AuthenticationFailed
+                OAuthOnboardingErrorCode::AuthenticationFailed
             }
             ProviderErrorKind::Transient | ProviderErrorKind::Throttled => {
-                GmailOnboardingErrorCode::ProviderUnavailable
+                OAuthOnboardingErrorCode::ProviderUnavailable
             }
             ProviderErrorKind::InvalidCursor
             | ProviderErrorKind::Protocol
-            | ProviderErrorKind::Permanent => GmailOnboardingErrorCode::AuthenticationFailed,
+            | ProviderErrorKind::Permanent => OAuthOnboardingErrorCode::AuthenticationFailed,
         },
     }
 }
 
-fn command_error(code: GmailOnboardingErrorCode) -> GmailOnboardingCommandError {
-    GmailOnboardingCommandError::from_code(code)
+fn command_error(
+    provider: Provider,
+    code: OAuthOnboardingErrorCode,
+) -> OAuthOnboardingCommandError {
+    OAuthOnboardingCommandError::from_code(provider, code)
 }
 
 fn failed_status(
-    code: GmailOnboardingErrorCode,
+    provider: Provider,
+    code: OAuthOnboardingErrorCode,
     flow_id: Option<String>,
     account: Option<ConnectedAccountSummary>,
-) -> GmailOnboardingStatus {
+) -> OAuthOnboardingStatus {
     let state = match code {
-        GmailOnboardingErrorCode::NotConfigured => GmailOnboardingState::Unconfigured,
-        GmailOnboardingErrorCode::Cancelled | GmailOnboardingErrorCode::AuthorizationDenied => {
-            GmailOnboardingState::Cancelled
+        OAuthOnboardingErrorCode::NotConfigured => OAuthOnboardingState::Unconfigured,
+        OAuthOnboardingErrorCode::Cancelled | OAuthOnboardingErrorCode::AuthorizationDenied => {
+            OAuthOnboardingState::Cancelled
         }
-        GmailOnboardingErrorCode::BrowserOpenFailed
-        | GmailOnboardingErrorCode::CallbackInvalid
-        | GmailOnboardingErrorCode::TimedOut
-        | GmailOnboardingErrorCode::AuthenticationFailed
-        | GmailOnboardingErrorCode::ProviderUnavailable
-        | GmailOnboardingErrorCode::StorageUnavailable
-        | GmailOnboardingErrorCode::Internal => GmailOnboardingState::Failed,
+        OAuthOnboardingErrorCode::BrowserOpenFailed
+        | OAuthOnboardingErrorCode::CallbackInvalid
+        | OAuthOnboardingErrorCode::TimedOut
+        | OAuthOnboardingErrorCode::AuthenticationFailed
+        | OAuthOnboardingErrorCode::ProviderUnavailable
+        | OAuthOnboardingErrorCode::StorageUnavailable
+        | OAuthOnboardingErrorCode::Internal => OAuthOnboardingState::Failed,
     };
-    GmailOnboardingStatus {
+    OAuthOnboardingStatus {
+        provider,
         state,
         flow_id,
         account,
-        error: Some(command_error(code)),
+        error: Some(command_error(provider, code)),
     }
 }
 
-fn internal_status() -> GmailOnboardingStatus {
-    failed_status(GmailOnboardingErrorCode::Internal, None, None)
+fn internal_status(provider: Provider) -> OAuthOnboardingStatus {
+    failed_status(provider, OAuthOnboardingErrorCode::Internal, None, None)
 }
 
 #[cfg(test)]
@@ -977,9 +1028,13 @@ mod tests {
         browser: Arc<FakeBrowser>,
         accounts: Arc<FakeAccounts>,
         scheduler: Arc<FakeScheduler>,
-    ) -> Arc<GmailOAuthSessionManager> {
-        Arc::new(GmailOAuthSessionManager::from_parts(
-            configured,
+    ) -> Arc<OAuthSessionManager> {
+        Arc::new(OAuthSessionManager::from_parts(
+            OAuthSessionConfig {
+                provider: Provider::Gmail,
+                redirect_host: RedirectHost::Ipv4Loopback,
+                configured,
+            },
             Arc::new(FakeAuthenticator::default()),
             accounts,
             Arc::new(FakeCredentials::default()),
@@ -999,7 +1054,7 @@ mod tests {
             Arc::new(FakeScheduler::default()),
         );
         let status = manager.start(None).await;
-        assert_eq!(status.state, GmailOnboardingState::Unconfigured);
+        assert_eq!(status.state, OAuthOnboardingState::Unconfigured);
         assert!(browser.url.lock().expect("browser URL").is_none());
     }
 
@@ -1043,7 +1098,7 @@ mod tests {
             Arc::clone(&scheduler),
         );
         let waiting = manager.start(None).await;
-        assert_eq!(waiting.state, GmailOnboardingState::WaitingForBrowser);
+        assert_eq!(waiting.state, OAuthOnboardingState::WaitingForBrowser);
         let authorization = browser
             .url
             .lock()
@@ -1075,13 +1130,13 @@ mod tests {
         assert!(response.contains("授权信息已收到"));
 
         for _ in 0..50 {
-            if manager.status().state == GmailOnboardingState::Connected {
+            if manager.status().state == OAuthOnboardingState::Connected {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let connected = manager.status();
-        assert_eq!(connected.state, GmailOnboardingState::Connected);
+        assert_eq!(connected.state, OAuthOnboardingState::Connected);
         assert_eq!(connected.flow_id, None);
         assert_eq!(
             connected
@@ -1135,17 +1190,17 @@ mod tests {
             .expect("read response");
 
         for _ in 0..50 {
-            if manager.status().state == GmailOnboardingState::Failed {
+            if manager.status().state == OAuthOnboardingState::Failed {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let failed = manager.status();
-        assert_eq!(waiting.state, GmailOnboardingState::WaitingForBrowser);
-        assert_eq!(failed.state, GmailOnboardingState::Failed);
+        assert_eq!(waiting.state, OAuthOnboardingState::WaitingForBrowser);
+        assert_eq!(failed.state, OAuthOnboardingState::Failed);
         assert_eq!(
             failed.error.as_ref().map(|error| error.code),
-            Some(GmailOnboardingErrorCode::StorageUnavailable)
+            Some(OAuthOnboardingErrorCode::StorageUnavailable)
         );
         assert!(failed.error.as_ref().is_some_and(|error| error.retryable));
         assert!(scheduler.called.load(Ordering::Acquire));
@@ -1162,16 +1217,16 @@ mod tests {
         );
         let first = manager.start(None).await;
         let second = manager.start(None).await;
-        assert_eq!(second.state, GmailOnboardingState::WaitingForBrowser);
+        assert_eq!(second.state, OAuthOnboardingState::WaitingForBrowser);
         assert_eq!(
             manager.cancel("stale-flow").state,
-            GmailOnboardingState::WaitingForBrowser
+            OAuthOnboardingState::WaitingForBrowser
         );
         assert_eq!(
             manager
                 .cancel(second.flow_id.as_deref().expect("flow id"))
                 .state,
-            GmailOnboardingState::Cancelled
+            OAuthOnboardingState::Cancelled
         );
         assert_ne!(first.flow_id, second.flow_id);
     }

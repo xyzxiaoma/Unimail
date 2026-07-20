@@ -850,6 +850,7 @@ mod tests {
     }
 
     struct FakeProvider {
+        provider: Provider,
         pages: Mutex<VecDeque<Result<SyncPage, ProviderError>>>,
         read_error: Mutex<Option<ProviderError>>,
         on_sync: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -862,6 +863,7 @@ mod tests {
     impl FakeProvider {
         fn new(pages: impl IntoIterator<Item = Result<SyncPage, ProviderError>>) -> Self {
             Self {
+                provider: Provider::Gmail,
                 pages: Mutex::new(pages.into_iter().collect()),
                 read_error: Mutex::new(None),
                 on_sync: Mutex::new(None),
@@ -870,6 +872,12 @@ mod tests {
                 initial_calls: AtomicUsize::new(0),
                 incremental_calls: AtomicUsize::new(0),
             }
+        }
+
+        fn outlook(pages: impl IntoIterator<Item = Result<SyncPage, ProviderError>>) -> Self {
+            let mut provider = Self::new(pages);
+            provider.provider = Provider::Outlook;
+            provider
         }
 
         fn set_on_sync(&self, callback: impl FnOnce() + Send + 'static) {
@@ -904,7 +912,7 @@ mod tests {
 
     impl SyncProvider for FakeProvider {
         fn provider(&self) -> Provider {
-            Provider::Gmail
+            self.provider
         }
 
         fn initial_sync<'a>(
@@ -999,6 +1007,30 @@ mod tests {
             SyncMode::Initial(InitialSyncLimit::new(500).expect("valid limit")),
         ))
         .expect("schedule other-provider operation");
+
+        assert_eq!(
+            block_on(coordinator.run_next(&TestCancellation::new(false)))
+                .expect("provider-filtered scheduler"),
+            RunOutcome::Idle
+        );
+        assert_eq!(provider.sync_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn outlook_coordinator_does_not_claim_gmail_operation() {
+        let provider = Arc::new(FakeProvider::outlook([]));
+        let store = FakeStore {
+            provider: Provider::Gmail,
+            ..FakeStore::default()
+        };
+        let coordinator = coordinator(provider.clone(), store);
+        block_on(coordinator.trigger(
+            AccountId::new(),
+            "inbox".to_owned(),
+            SyncTrigger::Manual,
+            SyncMode::Initial(InitialSyncLimit::new(500).expect("valid limit")),
+        ))
+        .expect("schedule Gmail operation");
 
         assert_eq!(
             block_on(coordinator.run_next(&TestCancellation::new(false)))

@@ -242,6 +242,38 @@ kbd {
   font-weight: 600;
   cursor: pointer;
 }
+.account-list {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.account-list button {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  padding: 8px;
+  color: #554c50;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #eadde0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.account-list small,
+.account-list em {
+  overflow: hidden;
+  color: #958b90;
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-list em {
+  color: #bd3f55;
+  font-weight: 600;
+}
 .settings-button {
   display: flex;
   align-items: center;
@@ -627,7 +659,7 @@ kbd {
   opacity: 0.5;
 }
 
-.gmail-dialog-backdrop {
+.oauth-dialog-backdrop {
   position: absolute;
   z-index: 30;
   inset: 0;
@@ -637,7 +669,7 @@ kbd {
   background: rgba(42, 31, 35, 0.34);
   backdrop-filter: blur(5px);
 }
-.gmail-dialog {
+.oauth-dialog {
   width: min(520px, 100%);
   max-height: 100%;
   overflow: auto;
@@ -647,30 +679,51 @@ kbd {
   border-radius: 16px;
   box-shadow: 0 26px 70px rgba(51, 35, 41, 0.3);
 }
-.gmail-dialog-header {
+.oauth-dialog-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
 }
-.gmail-dialog-header h2 {
+.oauth-dialog-header h2 {
   margin: 0;
   color: #342d30;
   font-size: 22px;
   letter-spacing: -0.03em;
 }
-.gmail-close-button {
+.oauth-close-button {
   flex: 0 0 auto;
   font-size: 24px;
   line-height: 1;
 }
-.gmail-dialog-introduction {
+.oauth-dialog-introduction {
   margin: 12px 0 18px;
   color: #746b6f;
   font-size: 13px;
   line-height: 1.65;
 }
-.gmail-status-card {
+.oauth-provider-choice {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.oauth-provider-choice button {
+  padding: 9px 12px;
+  color: #6e6569;
+  background: #fff;
+  border: 1px solid #dfd6d3;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oauth-provider-choice button[aria-pressed="true"] {
+  color: #bd3f55;
+  background: #fbe4e8;
+  border-color: #efbdc6;
+}
+.oauth-status-card {
   display: flex;
   align-items: flex-start;
   gap: 14px;
@@ -679,7 +732,7 @@ kbd {
   border: 1px solid #ece3e0;
   border-radius: 12px;
 }
-.gmail-status-mark {
+.oauth-status-mark {
   display: grid;
   place-items: center;
   width: 38px;
@@ -692,35 +745,35 @@ kbd {
   font-size: 18px;
   font-weight: 700;
 }
-.gmail-status-mark.waiting_for_browser,
-.gmail-status-mark.exchanging,
-.gmail-status-mark.loading {
-  animation: gmail-status-pulse 1.4s ease-in-out infinite;
+.oauth-status-mark.waiting_for_browser,
+.oauth-status-mark.exchanging,
+.oauth-status-mark.loading {
+  animation: oauth-status-pulse 1.4s ease-in-out infinite;
 }
-.gmail-status-mark.connected {
+.oauth-status-mark.connected {
   background: #4c9367;
 }
-.gmail-status-mark.unconfigured,
-.gmail-status-mark.cancelled {
+.oauth-status-mark.unconfigured,
+.oauth-status-mark.cancelled {
   color: #756c70;
   background: #e8e1df;
 }
-.gmail-status-mark.failed {
+.oauth-status-mark.failed {
   background: #b96045;
 }
-.gmail-status-card h3,
-.gmail-account-summary h3 {
+.oauth-status-card h3,
+.oauth-account-summary h3 {
   margin: 0;
   color: #3c3438;
   font-size: 13px;
 }
-.gmail-status-card p {
+.oauth-status-card p {
   margin: 5px 0 0;
   color: #83797e;
   font-size: 11px;
   line-height: 1.6;
 }
-.gmail-account-summary {
+.oauth-account-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -730,26 +783,26 @@ kbd {
   border: 1px solid #ebe4e1;
   border-radius: 10px;
 }
-.gmail-account-summary div {
+.oauth-account-summary div {
   display: grid;
   min-width: 0;
   gap: 3px;
 }
-.gmail-account-summary strong,
-.gmail-account-summary span {
+.oauth-account-summary strong,
+.oauth-account-summary span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.gmail-account-summary strong {
+.oauth-account-summary strong {
   color: #4b4246;
   font-size: 12px;
 }
-.gmail-account-summary span {
+.oauth-account-summary span {
   color: #92888d;
   font-size: 10px;
 }
-.gmail-account-summary .gmail-account-state {
+.oauth-account-summary .oauth-account-state {
   flex: 0 0 auto;
   padding: 5px 8px;
   color: #4d785c;
@@ -757,19 +810,19 @@ kbd {
   border-radius: 999px;
   font-weight: 600;
 }
-.gmail-privacy-note {
+.oauth-privacy-note {
   margin: 14px 2px 0;
   color: #9b9196;
   font-size: 10px;
   line-height: 1.55;
 }
-.gmail-dialog-actions {
+.oauth-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
 }
-.gmail-dialog-actions button {
+.oauth-dialog-actions button {
   padding: 8px 14px;
   color: #6e6569;
   background: #fff;
@@ -779,24 +832,24 @@ kbd {
   font-weight: 600;
   cursor: pointer;
 }
-.gmail-dialog-actions button:hover:not(:disabled) {
+.oauth-dialog-actions button:hover:not(:disabled) {
   background: #faf6f5;
 }
-.gmail-dialog-actions .gmail-primary-action {
+.oauth-dialog-actions .oauth-primary-action {
   color: #fff;
   background: #cf4b62;
   border-color: #cf4b62;
 }
-.gmail-dialog-actions .gmail-primary-action:hover:not(:disabled) {
+.oauth-dialog-actions .oauth-primary-action:hover:not(:disabled) {
   background: #bd3f55;
 }
-.gmail-dialog-actions button:disabled,
-.gmail-close-button:disabled {
+.oauth-dialog-actions button:disabled,
+.oauth-close-button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
 
-@keyframes gmail-status-pulse {
+@keyframes oauth-status-pulse {
   0%,
   100% {
     box-shadow: 0 0 0 0 rgba(208, 80, 102, 0.12);
@@ -856,7 +909,7 @@ kbd {
     scroll-behavior: auto !important;
     transition: none !important;
   }
-  .gmail-status-mark {
+  .oauth-status-mark {
     animation: none !important;
   }
 }

@@ -19,6 +19,21 @@ pub(crate) const FLOW_TIMEOUT: Duration = Duration::from_mins(5);
 const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024;
 const READ_CHUNK_BYTES: usize = 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RedirectHost {
+    Ipv4Loopback,
+    Localhost,
+}
+
+impl RedirectHost {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ipv4Loopback => "127.0.0.1",
+            Self::Localhost => "localhost",
+        }
+    }
+}
+
 const COMPLETE_PAGE: &str = r#"<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
@@ -152,10 +167,16 @@ fn open_system_browser(url: &str) -> Result<(), BrowserOpenError> {
 pub(crate) struct LoopbackReceiver {
     listener: TcpListener,
     port: u16,
+    redirect_host: RedirectHost,
 }
 
 impl LoopbackReceiver {
+    #[cfg(test)]
     pub(crate) async fn bind() -> Result<Self, LoopbackError> {
+        Self::bind_for(RedirectHost::Ipv4Loopback).await
+    }
+
+    pub(crate) async fn bind_for(redirect_host: RedirectHost) -> Result<Self, LoopbackError> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|_| LoopbackError::Bind)?;
@@ -166,12 +187,17 @@ impl LoopbackReceiver {
         Ok(Self {
             listener,
             port: address.port(),
+            redirect_host,
         })
     }
 
     #[must_use]
     pub(crate) fn redirect_uri(&self) -> SensitiveString {
-        SensitiveString::new(format!("http://127.0.0.1:{}{CALLBACK_PATH}", self.port))
+        SensitiveString::new(format!(
+            "http://{}:{}{CALLBACK_PATH}",
+            self.redirect_host.as_str(),
+            self.port
+        ))
     }
 
     #[cfg(test)]
@@ -193,7 +219,14 @@ impl LoopbackReceiver {
             if peer.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
                 return Err(LoopbackError::InvalidRequest);
             }
-            handle_callback(stream, self.port, expected_state, cancellation).await
+            handle_callback(
+                stream,
+                self.port,
+                self.redirect_host,
+                expected_state,
+                cancellation,
+            )
+            .await
         };
 
         match tokio::time::timeout(timeout, receive).await {
@@ -206,10 +239,18 @@ impl LoopbackReceiver {
 async fn handle_callback(
     mut stream: TcpStream,
     port: u16,
+    redirect_host: RedirectHost,
     expected_state: &str,
     cancellation: &dyn Cancellation,
 ) -> Result<SensitiveString, LoopbackError> {
-    let parsed = read_and_validate_request(&mut stream, port, expected_state, cancellation).await;
+    let parsed = read_and_validate_request(
+        &mut stream,
+        port,
+        redirect_host,
+        expected_state,
+        cancellation,
+    )
+    .await;
     let (status, page) = if parsed.is_ok() {
         ("200 OK", COMPLETE_PAGE)
     } else {
@@ -224,6 +265,7 @@ async fn handle_callback(
 async fn read_and_validate_request(
     stream: &mut TcpStream,
     port: u16,
+    redirect_host: RedirectHost,
     expected_state: &str,
     cancellation: &dyn Cancellation,
 ) -> Result<SensitiveString, LoopbackError> {
@@ -244,8 +286,8 @@ async fn read_and_validate_request(
         return Err(LoopbackError::InvalidRequest);
     }
 
-    validate_headers(lines, version, port)?;
-    validate_callback_target(target, port, expected_state)
+    validate_headers(lines, version, port, redirect_host)?;
+    validate_callback_target(target, port, redirect_host, expected_state)
 }
 
 async fn read_request_header(
@@ -284,6 +326,7 @@ fn validate_headers<'a>(
     lines: impl Iterator<Item = &'a str>,
     version: &str,
     port: u16,
+    redirect_host: RedirectHost,
 ) -> Result<(), LoopbackError> {
     let mut content_length = None;
     let mut transfer_encoding = false;
@@ -321,7 +364,7 @@ fn validate_headers<'a>(
     if content_length.unwrap_or(0) != 0 || transfer_encoding {
         return Err(LoopbackError::InvalidRequest);
     }
-    let expected_host = format!("127.0.0.1:{port}");
+    let expected_host = format!("{}:{port}", redirect_host.as_str());
     if (version == "HTTP/1.1" && host.is_none()) || host.is_some_and(|host| host != expected_host) {
         return Err(LoopbackError::InvalidRequest);
     }
@@ -331,9 +374,10 @@ fn validate_headers<'a>(
 fn validate_callback_target(
     target: &str,
     port: u16,
+    redirect_host: RedirectHost,
     expected_state: &str,
 ) -> Result<SensitiveString, LoopbackError> {
-    let parsed = Url::parse(&format!("http://127.0.0.1:{port}{target}"))
+    let parsed = Url::parse(&format!("http://{}:{port}{target}", redirect_host.as_str()))
         .map_err(|_| LoopbackError::InvalidRequest)?;
     if parsed.path() != CALLBACK_PATH {
         return Err(LoopbackError::WrongPath);
@@ -399,7 +443,7 @@ mod tests {
 
     use super::{
         CALLBACK_PATH, COMPLETE_PAGE, DesktopCancellation, ERROR_PAGE, LoopbackError,
-        LoopbackReceiver, oauth_state_from_authorization_url,
+        LoopbackReceiver, RedirectHost, oauth_state_from_authorization_url,
     };
 
     async fn exchange(port: u16, request: Vec<u8>) -> String {
@@ -418,7 +462,11 @@ mod tests {
     }
 
     fn request(port: u16, method: &str, target: &str) -> Vec<u8> {
-        format!("{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+        request_with_host(port, method, target, "127.0.0.1")
+    }
+
+    fn request_with_host(port: u16, method: &str, target: &str, host: &str) -> Vec<u8> {
+        format!("{method} {target} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n")
             .into_bytes()
     }
 
@@ -454,6 +502,42 @@ mod tests {
         assert!(!response.contains("fake-state"));
         assert!(response.contains("Content-Security-Policy"));
         assert!(response.contains("Referrer-Policy: no-referrer"));
+    }
+
+    #[tokio::test]
+    async fn outlook_exposes_localhost_redirect_while_binding_ipv4_loopback() {
+        let receiver = LoopbackReceiver::bind_for(RedirectHost::Localhost)
+            .await
+            .expect("bind Outlook callback");
+        let port = receiver.port();
+        assert_eq!(
+            receiver.redirect_uri().expose(),
+            format!("http://localhost:{port}{CALLBACK_PATH}")
+        );
+        let cancellation = DesktopCancellation::default();
+        let client = tokio::spawn(exchange(
+            port,
+            request_with_host(
+                port,
+                "GET",
+                "/oauth/callback?code=fake-code&state=fake-state",
+                "localhost",
+            ),
+        ));
+        let callback = receiver
+            .receive("fake-state", &cancellation, Duration::from_secs(1))
+            .await
+            .expect("valid Outlook callback");
+        assert_eq!(
+            callback.expose(),
+            format!("http://localhost:{port}/oauth/callback?code=fake-code&state=fake-state")
+        );
+        assert!(
+            client
+                .await
+                .expect("client task")
+                .starts_with("HTTP/1.1 200 OK")
+        );
     }
 
     #[tokio::test]

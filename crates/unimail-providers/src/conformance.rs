@@ -325,6 +325,7 @@ mod tests {
         let send_request = SendRequest {
             account_id,
             provider_thread_id: None,
+            original_provider_message_id: None,
             message: ComposedMessage::new(
                 b"fictional message".to_vec(),
                 "<stable@example.com>".to_owned(),

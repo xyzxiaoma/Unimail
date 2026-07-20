@@ -3,6 +3,7 @@
 pub mod conformance;
 pub mod fake;
 pub mod gmail;
+pub mod graph;
 mod mime;
 
 pub use mime::SharedMimeCodec;

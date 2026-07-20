@@ -16,15 +16,15 @@ export type Provider = "gmail" | "outlook" | "qq" | "netease";
 
 export type AccountAuthState = "connected" | "needs_authentication" | "unavailable";
 
-export type GmailOnboardingState = "unconfigured" | "idle" | "waiting_for_browser" | "exchanging" | "connected" | "cancelled" | "failed";
+export type OAuthOnboardingState = "unconfigured" | "idle" | "waiting_for_browser" | "exchanging" | "connected" | "cancelled" | "failed";
 
-export type GmailOnboardingErrorCode = "not_configured" | "browser_open_failed" | "callback_invalid" | "authorization_denied" | "timed_out" | "cancelled" | "authentication_failed" | "provider_unavailable" | "storage_unavailable" | "internal";
+export type OAuthOnboardingErrorCode = "not_configured" | "browser_open_failed" | "callback_invalid" | "authorization_denied" | "timed_out" | "cancelled" | "authentication_failed" | "provider_unavailable" | "storage_unavailable" | "internal";
 
-export type GmailOnboardingCommandError = { code: GmailOnboardingErrorCode, message: string, retryable: boolean, };
+export type OAuthOnboardingCommandError = { provider: Provider, code: OAuthOnboardingErrorCode, message: string, retryable: boolean, };
 
 export type ConnectedAccountSummary = { id: string, provider: Provider, email: string, displayName: string | null, authState: AccountAuthState, };
 
-export type GmailOnboardingStatus = { state: GmailOnboardingState, flowId: string | null, account: ConnectedAccountSummary | null, error: GmailOnboardingCommandError | null, };
+export type OAuthOnboardingStatus = { provider: Provider, state: OAuthOnboardingState, flowId: string | null, account: ConnectedAccountSummary | null, error: OAuthOnboardingCommandError | null, };
 
 export function applicationInfo(): Promise<unknown> {
   return invoke("application_info");
@@ -34,16 +34,16 @@ export function storageStatus(): Promise<unknown> {
   return invoke("storage_status");
 }
 
-export function gmailOnboardingStatus(): Promise<unknown> {
-  return invoke("gmail_onboarding_status");
+export function oauthOnboardingStatus(provider: Provider): Promise<unknown> {
+  return invoke("oauth_onboarding_status", { provider });
 }
 
-export function startGmailOnboarding(accountId: string | null): Promise<unknown> {
-  return invoke("start_gmail_onboarding", { accountId });
+export function startOauthOnboarding(provider: Provider, accountId: string | null): Promise<unknown> {
+  return invoke("start_oauth_onboarding", { provider, accountId });
 }
 
-export function cancelGmailOnboarding(flowId: string): Promise<unknown> {
-  return invoke("cancel_gmail_onboarding", { flowId });
+export function cancelOauthOnboarding(provider: Provider, flowId: string): Promise<unknown> {
+  return invoke("cancel_oauth_onboarding", { provider, flowId });
 }
 
 export function connectedAccounts(): Promise<unknown> {

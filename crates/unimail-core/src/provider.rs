@@ -203,11 +203,22 @@ impl fmt::Debug for ProviderRevision {
 }
 
 /// Stable remote message identity.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RemoteMessageKey {
     pub account_id: AccountId,
     pub provider_mailbox_id: String,
     pub provider_message_id: String,
+}
+
+impl fmt::Debug for RemoteMessageKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RemoteMessageKey")
+            .field("account_id", &self.account_id)
+            .field("has_mailbox_id", &!self.provider_mailbox_id.is_empty())
+            .field("has_message_id", &!self.provider_message_id.is_empty())
+            .finish()
+    }
 }
 
 /// Normalized remote message without storage-owned IDs or sanitizer fields.
@@ -285,10 +296,20 @@ pub struct FetchBodyRequest {
     pub key: RemoteMessageKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AttachmentRequest {
     pub key: RemoteMessageKey,
     pub provider_part_id: String,
+}
+
+impl fmt::Debug for AttachmentRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttachmentRequest")
+            .field("key", &self.key)
+            .field("has_provider_part_id", &!self.provider_part_id.is_empty())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,17 +353,46 @@ pub struct AttachmentDownload {
     pub checksum_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SendRequest {
     pub account_id: AccountId,
     pub provider_thread_id: Option<String>,
+    pub original_provider_message_id: Option<String>,
     pub message: ComposedMessage,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for SendRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SendRequest")
+            .field("account_id", &self.account_id)
+            .field("has_provider_thread_id", &self.provider_thread_id.is_some())
+            .field(
+                "has_original_provider_message_id",
+                &self.original_provider_message_id.is_some(),
+            )
+            .field("message", &self.message)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct AcceptedSend {
     pub provider_message_id: Option<String>,
     pub reconciliation_key: ReconciliationKey,
+}
+
+impl fmt::Debug for AcceptedSend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcceptedSend")
+            .field(
+                "has_provider_message_id",
+                &self.provider_message_id.is_some(),
+            )
+            .field("reconciliation_key", &self.reconciliation_key)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -596,12 +646,15 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{AccountId, CredentialRef, MimeBody, MimeCodec, NormalizedMimeMessage, Provider};
+    use crate::{
+        AccountId, ComposedMessage, CredentialRef, DeliveryEnvelope, MimeBody, MimeCodec,
+        NormalizedMimeMessage, Provider,
+    };
 
     use super::{
-        AccountAuthenticator, AuthenticatedAccount, InitialSyncLimit, MailProvider,
-        OpaqueProviderCursor, ProviderRevision, ReconciliationKey, RemoteMessage, RemoteMessageKey,
-        SensitiveString,
+        AcceptedSend, AccountAuthenticator, AttachmentRequest, AuthenticatedAccount,
+        InitialSyncLimit, MailProvider, OpaqueProviderCursor, ProviderRevision, ReconciliationKey,
+        RemoteMessage, RemoteMessageKey, SendRequest, SensitiveString,
     };
 
     #[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -735,11 +788,61 @@ mod tests {
         let debug = format!("{message:?}");
 
         for private in [
+            "inbox",
+            "message-1",
             "private-revision",
             "private-thread",
             "private-subject",
             "private-rfc-id",
             "private-body",
+        ] {
+            assert!(!debug.contains(private));
+        }
+    }
+
+    #[test]
+    fn request_and_send_debug_omit_provider_identifiers() {
+        let account_id = AccountId::new();
+        let key = RemoteMessageKey {
+            account_id,
+            provider_mailbox_id: "private-mailbox".to_owned(),
+            provider_message_id: "private-provider-message".to_owned(),
+        };
+        let attachment = AttachmentRequest {
+            key,
+            provider_part_id: "private-attachment".to_owned(),
+        };
+        let send = SendRequest {
+            account_id,
+            provider_thread_id: Some("private-thread".to_owned()),
+            original_provider_message_id: Some("private-original".to_owned()),
+            message: ComposedMessage::new(
+                b"private MIME".to_vec(),
+                "private-rfc-id".to_owned(),
+                DeliveryEnvelope {
+                    from: "private@example.com".to_owned(),
+                    recipients: vec!["hidden@example.com".to_owned()],
+                },
+            ),
+        };
+        let accepted = AcceptedSend {
+            provider_message_id: Some("private-accepted-id".to_owned()),
+            reconciliation_key: ReconciliationKey::new("private-reconciliation"),
+        };
+        let debug = format!("{attachment:?} {send:?} {accepted:?}");
+
+        for private in [
+            "private-mailbox",
+            "private-provider-message",
+            "private-attachment",
+            "private-thread",
+            "private-original",
+            "private MIME",
+            "private-rfc-id",
+            "private@example.com",
+            "hidden@example.com",
+            "private-accepted-id",
+            "private-reconciliation",
         ] {
             assert!(!debug.contains(private));
         }

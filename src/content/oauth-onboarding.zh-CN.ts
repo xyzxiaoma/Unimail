@@ -1,0 +1,77 @@
+import type { OAuthProvider } from "../lib/ipc/oauth-onboarding";
+
+const shared = {
+  eyebrow: "邮箱账户",
+  close: "关闭邮箱连接窗口",
+  dismiss: "关闭",
+  addAccount: "添加邮箱账户",
+  startSetup: "开始设置",
+  retry: "重新尝试",
+  cancel: "取消连接",
+  done: "完成",
+  connectedAccountsHeading: "已连接账户",
+  needsAuthentication: "需要重新连接",
+  connected: "连接正常",
+  unavailable: "暂不可用",
+  accountsUnavailable: "暂时无法读取已连接账户。",
+} as const;
+
+export const oauthProviderCopy = {
+  gmail: {
+    ...shared,
+    providerName: "Gmail",
+    mark: "G",
+    title: "连接 Gmail",
+    introduction: "使用系统浏览器完成 Google 授权。Unimail 不会在页面中显示或保存授权码。",
+    privacyNote: "授权完成后，此窗口会自动更新。请勿关闭系统浏览器中的授权页面。",
+    connect: "连接 Gmail",
+    reconnect: "重新连接 Gmail",
+    refreshing: "正在读取 Gmail 连接状态",
+    genericUnavailable: "暂时无法读取 Gmail 连接状态。",
+    configuredTitle: "Gmail 已准备好连接",
+    configuredBody: "点击后会打开系统浏览器，请在 Google 页面中确认授权。",
+    unconfiguredTitle: "未配置 Gmail 接入",
+    unconfiguredBody: "此安装版本尚未配置 Gmail 客户端 ID，其他本地功能仍可正常使用。",
+    waitingTitle: "请在系统浏览器中继续",
+    waitingBody: "完成 Google 授权后返回 Unimail；无需复制任何代码或链接。",
+    exchangingTitle: "正在完成 Gmail 连接",
+    exchangingBody: "正在安全保存账户并准备同步收件箱，请稍候。",
+    connectedTitle: "Gmail 已连接",
+    connectedBody: "账户已保存，最新收件箱同步即将开始。",
+    cancelledTitle: "已取消 Gmail 连接",
+    cancelledBody: "账户没有发生更改。需要时可以重新开始。",
+    failedTitle: "Gmail 连接未完成",
+    viewAccount: "查看 Gmail 账户",
+  },
+  outlook: {
+    ...shared,
+    providerName: "Outlook",
+    mark: "O",
+    title: "连接 Outlook",
+    introduction:
+      "使用系统浏览器登录个人 Microsoft 账户或工作/学校账户。Unimail 不会在页面中显示或保存授权码。",
+    privacyNote: "授权完成后，此窗口会自动更新。请勿复制浏览器中的链接或授权信息。",
+    connect: "连接 Outlook",
+    reconnect: "重新连接 Outlook",
+    refreshing: "正在读取 Outlook 连接状态",
+    genericUnavailable: "暂时无法读取 Outlook 连接状态。",
+    configuredTitle: "Outlook 已准备好连接",
+    configuredBody: "点击后会打开系统浏览器，请在 Microsoft 页面中选择并授权账户。",
+    unconfiguredTitle: "未配置 Outlook 接入",
+    unconfiguredBody: "此安装版本尚未配置 Microsoft 客户端 ID，其他本地功能仍可正常使用。",
+    waitingTitle: "请在系统浏览器中继续",
+    waitingBody: "完成 Microsoft 授权后返回 Unimail；无需复制任何代码或链接。",
+    exchangingTitle: "正在完成 Outlook 连接",
+    exchangingBody: "正在安全保存账户并准备同步最新 500 封收件箱邮件，请稍候。",
+    connectedTitle: "Outlook 已连接",
+    connectedBody: "账户已保存，最新收件箱同步即将开始。",
+    cancelledTitle: "已取消 Outlook 连接",
+    cancelledBody: "账户没有发生更改。需要时可以重新开始。",
+    failedTitle: "Outlook 连接未完成",
+    viewAccount: "查看 Outlook 账户",
+  },
+} as const satisfies Record<OAuthProvider, object>;
+
+export function onboardingCopy(provider: OAuthProvider) {
+  return oauthProviderCopy[provider];
+}
