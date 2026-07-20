@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Governs OAuth, provider cursor, MIME, retry, attachment, send, and redaction contracts."}
+{"file":".trellis/spec/backend/sync-offline-guidelines.md","reason":"Governs durable cursor recovery, provider-aware coordination, read intent, and no automatic ambiguous-send retry."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Governs account reconnect metadata, credential references, and repository transaction boundaries."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Governs the Simplified Chinese onboarding surface and accessible UI states."}
+{"file":".trellis/spec/frontend/ipc-validation-guidelines.md","reason":"Governs safe Tauri DTO generation and runtime decoding without OAuth secret exposure."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/provider-integration.md","reason":"Contains the approved Gmail OAuth/API behavior, quota mapping, and secret-free contract-test research."}
