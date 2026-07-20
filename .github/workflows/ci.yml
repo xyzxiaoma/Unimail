@@ -121,8 +121,29 @@ jobs:
       - name: 运行 Graph OAuth 测试
         run: "cargo test -p unimail-providers --lib graph::oauth::"
 
-      - name: 运行 Graph Provider 测试
-        run: "cargo test -p unimail-providers --lib graph::provider::"
+      - name: 运行 Graph 时间戳测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::graph_timestamps_convert_to_epoch_milliseconds -- --exact"
+
+      - name: 运行 Graph 初始游标绑定测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::initial_continuation_is_bound_to_account_mailbox_and_limit -- --exact"
+
+      - name: 运行 Graph 初始同步测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::initial_sync_completes_delta_baseline_before_fetching_latest_messages -- --exact"
+
+      - name: 运行 Graph 增量删除测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::incremental_removed_message_becomes_gone_with_new_delta_checkpoint -- --exact"
+
+      - name: 运行 Graph MIME 回复测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::reply_sends_exact_standard_base64_mime_and_accepts_graph_202 -- --exact"
+
+      - name: 运行 Graph 引用附件测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::reference_attachment_returns_typed_unsupported_without_fetching_value -- --exact"
+
+      - name: 运行 Graph 文件附件测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::file_attachment_streams_value_bytes_with_immutable_identity -- --exact"
+
+      - name: 运行 Graph 已读赋值测试
+        run: "cargo test -p unimail-providers --lib graph::provider::tests::repeated_read_assignment_is_idempotent_and_returns_revision -- --exact"
 
       - name: 运行共享 MIME 测试
         run: "cargo test -p unimail-providers --lib mime::"
