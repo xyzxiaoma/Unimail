@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~110 | Active |
+| `journal-1.md` | ~146 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-07-20 | Implement durable sync and offline core | `7fac44f`, `9808fe1`, `a362756`, `8f7ae6e` | `main` |
 | 3 | 2026-07-20 | Provider contracts and shared MIME | `71dacfc`, `403fc28` | `main` |
 | 2 | 2026-07-19 | Encrypted storage and domain | `6cd1f0f`, `c37219f`, `3e9eee9` | `main` |
 | 1 | 2026-07-19 | Initialize Unimail desktop foundation | `8cea097`, `e596a74` | `main` |
