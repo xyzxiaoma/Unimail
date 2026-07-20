@@ -162,28 +162,33 @@ const status = decodeStorageStatus(await storageStatus());
 - Manual edits to `src/lib/ipc/bindings.ts`.
 - Returning a typed success fallback after an IPC rejection.
 
-## Mandatory Seven-Section Scenario: Gmail onboarding IPC
+## Mandatory Seven-Section Scenario: provider-aware OAuth onboarding IPC
 
 ### 1. Scope / Trigger
 
-This applies to Gmail onboarding DTOs, Tauri command names, generated bindings, runtime decoders,
-the account dialog, and account-summary restoration.
+This applies to Gmail/Outlook OAuth DTOs, Tauri command names, generated bindings, runtime
+decoders, the account dialog, provider selection, and account-summary restoration.
 
 ### 2. Signature and Flow
 
 ```text
-gmail_onboarding_status / start_gmail_onboarding / cancel_gmail_onboarding / connected_accounts
+oauth_onboarding_status(provider) / start_oauth_onboarding(provider, account_id)
+  / cancel_oauth_onboarding(provider, flow_id) / connected_accounts
   -> Promise<unknown>
-  -> decodeGmailOnboardingStatus / decodeConnectedAccounts
-  -> GmailOnboardingDialog / App account entry
+  -> decodeOAuthOnboardingStatus / decodeConnectedAccounts
+  -> OAuthOnboardingDialog / App account entries
 ```
 
 ### 3. Contract
 
-- React receives only safe state, flow ID, account summary, and fixed error envelope. It never
+- React receives only provider, safe state, flow ID, account summary, and fixed error envelope. It never
   receives authorization URLs, callback URLs, state, code, verifier, token, or credential ref.
 - Active states require a non-empty flow ID. The `connected` terminal state requires `flowId=null`,
-  one Gmail account summary, and no error.
+  one account whose provider matches the top-level provider, and no error.
+- Only `gmail` and `outlook` are valid browser OAuth providers. QQ/163 authorization-code setup
+  must remain a separate later boundary.
+- Fixed error envelopes include the provider and must match that provider's Simplified Chinese
+  message exactly.
 - Safe account summaries retain `needs_authentication` accounts so the sidebar can expose the
   explicit reconnect path; filtering them out makes the recovery UI unreachable.
 - A retained `connected` terminal status must still offer an explicit connect/reconnect button
@@ -196,14 +201,16 @@ gmail_onboarding_status / start_gmail_onboarding / cancel_gmail_onboarding / con
 | Unknown state/provider/auth state/error code | Throw `TypeError` |
 | Fixed error message or retryability drifts | Throw `TypeError` |
 | Active state has null/empty flow ID | Throw `TypeError` |
-| Connected state has non-null flow ID, no Gmail account, or an error | Throw `TypeError` |
+| Top-level provider is QQ/163 or differs from account/error provider | Throw `TypeError` |
+| Connected state has non-null flow ID, no matching account, or an error | Throw `TypeError` |
 | Command rejects with an unverified value | Display generic Chinese unavailable copy; never render payload text |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: OAuth success serializes `{ state: "connected", flowId: null, account, error: null }`,
+- Good: OAuth success serializes `{ provider, state: "connected", flowId: null, account, error: null }`,
   the decoder accepts it, and reopening the dialog can reconnect that account.
-- Base: an account with `needs_authentication` remains visible and is labelled “重新连接 Gmail”.
+- Base: the new-account dialog can switch between Gmail and Outlook before starting; an account
+  with `needs_authentication` remains visible with its provider-specific reconnect label.
 - Bad: the backend retains the completed flow ID, or `connected_accounts` filters out the account
   precisely when authentication expires.
 
@@ -211,7 +218,8 @@ gmail_onboarding_status / start_gmail_onboarding / cancel_gmail_onboarding / con
 
 - Decoder tables cover every lifecycle state, exact fixed errors, invalid combinations, and safe
   rejection preservation.
-- Tauri tests assert connected terminal `flow_id=None` and needs-auth summaries remain listed.
+- Tauri tests assert provider routing, connected terminal `flow_id=None`, localhost/127.0.0.1
+  redirect-host differences, and needs-auth summaries remain listed.
 - Component/App tests assert polling stops at connected, reopening can reconnect, revoked accounts
   retain the reconnect entry, Escape cancellation, focus containment, and unverified errors do not
   leak.
@@ -220,9 +228,9 @@ gmail_onboarding_status / start_gmail_onboarding / cancel_gmail_onboarding / con
 ### 7. Wrong vs Correct
 
 ```tsx
-// Wrong: a completed backend status becomes undecodable and recovery disappears.
-{ state: "connected", flowId: "stale-flow", account, error: null }
+// Wrong: provider mismatch creates a private, unsafe frontend interpretation.
+{ provider: "outlook", state: "connected", flowId: null, account: gmailAccount, error: null }
 
-// Correct: terminal status is secret-free and restartable.
-{ state: "connected", flowId: null, account, error: null }
+// Correct: terminal status is provider-bound, secret-free, and restartable.
+{ provider: "outlook", state: "connected", flowId: null, account: outlookAccount, error: null }
 ```

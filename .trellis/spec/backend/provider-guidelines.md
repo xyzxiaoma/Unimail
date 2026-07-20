@@ -292,3 +292,92 @@ struct TokenResponse { access_token: String }
 // Correct: use the wire names directly and validate before persistence.
 struct TokenResponse { access_token: String }
 ```
+
+## Scenario: Microsoft public-client OAuth and Graph Outlook adapter
+
+### 1. Scope / Trigger
+
+Apply this scenario when changing `crates/unimail-providers/src/graph/**`, Outlook account
+routing, provider-aware desktop OAuth, Graph delta checkpoints, or Graph MIME send/reply.
+
+### 2. Signatures
+
+```rust
+GraphConfig::from_client_id(client_id)
+GraphAuthenticator::new(config, credential_store)
+GraphProvider::new(config, credential_store, registry, SharedMimeCodec)
+
+oauth_onboarding_status(provider)
+start_oauth_onboarding(provider, account_id)
+cancel_oauth_onboarding(provider, flow_id)
+```
+
+`SendRequest` carries both optional `provider_thread_id` for Gmail and optional
+`original_provider_message_id` for Graph native reply routing. Each adapter ignores context it
+does not own.
+
+### 3. Contracts
+
+- The only Outlook configuration value is `UNIMAIL_OUTLOOK_CLIENT_ID`; no client secret field,
+  environment key, command argument, or frontend DTO is allowed.
+- Authorization uses the fixed `common` v2 authority, PKCE S256, random one-use state,
+  `prompt=select_account`, and exactly `offline_access User.Read Mail.ReadWrite Mail.Send`.
+- The listener binds `127.0.0.1`; the Microsoft redirect and Host are
+  `http://localhost:{ephemeral}/oauth/callback`.
+- Every identity-bearing Graph request sends `Prefer: IdType="ImmutableId"`. Full next/delta
+  URLs remain opaque, account/mailbox-bound cursor JSON and must match the configured Graph origin.
+- Initial sync is preflight boundary -> complete metadata-only delta baseline -> final newest
+  at-most-500 fetch. A delta next link is never persisted as a durable checkpoint.
+- Raw messages come from `/messages/{id}/$value` and pass through `SharedMimeCodec`. File/item
+  attachments stream from attachment `$value`; reference attachments return
+  `graph_reference_attachment_unsupported`.
+- MIME send/reply bodies are standard padded Base64 in `text/plain`. `202 Accepted` returns no
+  provider message ID and retains the RFC Message-ID reconciliation key.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Missing public client ID | `Permanent / graph_not_configured`; desktop remains usable |
+| Redirect host is not exact `localhost` | `Permanent / graph_redirect_invalid` |
+| Missing/rotated/invalid credential | `Authentication`; account moves toward reconnect |
+| Second API `401` | `graph_authentication_required`; no automatic retry loop |
+| Delta `410` or `syncStateNotFound` | `InvalidCursor / graph_delta_cursor_invalid` |
+| Opaque URL origin/path mismatch | `Protocol / graph_cursor_url_invalid`; no dispatch |
+| `429` with valid `Retry-After` | `Throttled` with exact `RetryHint::After` |
+| Reference attachment | `Permanent / graph_reference_attachment_unsupported` |
+| `202` send/reply | `Accepted { provider_message_id: None, reconciliation_key }` |
+| Transport failure after send dispatch | `UnknownAfterSubmission`; never automatic resend |
+
+### 5. Good / Base / Bad Cases
+
+- Good: complete the baseline to a delta link, then fetch the final newest 500; changes during
+  bootstrap are replayed by the next incremental sync.
+- Base: personal and work/school profiles use `mail`, falling back to `userPrincipalName`, while
+  only safe normalized account metadata leaves the provider crate.
+- Bad: expose a Graph next link as a normal string in IPC/logs, persist a next link as the durable
+  checkpoint, use URL-safe Base64 for send, or retry a post-dispatch transport failure.
+
+### 6. Tests Required
+
+- OAuth tests assert `common`, exact scopes, PKCE/state, localhost redirect, profile fallback,
+  refresh rotation/retention/single-flight, no client secret, and local disconnect deletion.
+- HTTP/provider tests assert immutable-ID headers, gap-safe initial ordering, opaque pagination,
+  tombstones, invalid cursor, MIME identity, file/item/reference attachments, idempotent read
+  assignment, standard Base64 send/reply, `202`, rejection, and ambiguous outcome.
+- Cross-layer tests assert provider-aware generated bindings/decoders/dialog behavior and prove an
+  Outlook coordinator cannot claim Gmail/QQ/163 operations.
+- Run strict Rust/frontend checks, binding drift, changed-path scans, and native Windows/macOS
+  unsigned builds.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: a delta next link is durable and the initial run stops at an arbitrary page.
+DurableCheckpoint::new(next_link)
+
+// Correct: traverse baseline pages to @odata.deltaLink, then fetch newest messages.
+SyncPageState::More(redacted_next_link)
+// ... terminal baseline page ...
+SyncPageState::Complete(redacted_delta_link)
+```

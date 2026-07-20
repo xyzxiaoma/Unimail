@@ -18,7 +18,7 @@ implemented integrations.
 | [Error Handling](./error-handling.md) | `application_info` and fallible `storage_status` IPC contracts | Storage established |
 | [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
-| [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, Gmail OAuth/REST, cursor safety, MIME budgets, conformance, and send ambiguity | Gmail adapter established |
+| [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, Gmail/Graph OAuth and APIs, cursor safety, MIME budgets, conformance, and send ambiguity | Gmail and Outlook adapters established |
 | [Sync and Offline Guidelines](./sync-offline-guidelines.md) | Durable sync orchestration, read intent generations, retry/cancellation, and offline send review | Sync core established |
 
 ## Pre-Development Checklist

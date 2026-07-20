@@ -51,6 +51,29 @@ npm run tauri dev
 
 Unimail V1 请求 `gmail.modify` 与 `gmail.send`，令牌仅写入 Windows Credential Manager 或 macOS Keychain，本地 SQLCipher 数据库只保存不含令牌的凭据引用。真实账号验收步骤见 [`doc/Gmail_Owner_Acceptance.zh-CN.md`](doc/Gmail_Owner_Acceptance.zh-CN.md)。
 
+## Outlook 接入配置
+
+Outlook 使用 Microsoft Entra 公共桌面客户端、系统浏览器和 PKCE，支持个人 Microsoft 账户以及 Microsoft 365 工作/学校账户。桌面应用只使用公开 client ID，绝不接受 client secret。
+
+1. 在 Microsoft Entra 管理中心创建应用注册，将“支持的账户类型”设置为同时允许组织目录账户和个人 Microsoft 账户。
+2. 在“身份验证”中添加“移动和桌面应用程序”平台，并启用公共客户端流。回调使用 `http://localhost:{动态端口}/oauth/callback`；Unimail 实际只监听 IPv4 `127.0.0.1`。
+3. 添加委托权限 `User.Read`、`Mail.ReadWrite`、`Mail.Send`；登录时还会请求 `offline_access`。
+4. 在启动或构建 Unimail 的同一终端设置公开 client ID：
+
+```powershell
+$env:UNIMAIL_OUTLOOK_CLIENT_ID="你的公开应用客户端ID"
+npm run tauri dev
+```
+
+macOS/Linux shell 可使用：
+
+```bash
+export UNIMAIL_OUTLOOK_CLIENT_ID="你的公开应用客户端ID"
+npm run tauri dev
+```
+
+未配置该值时，Outlook 入口会显示安全的未配置状态，Gmail 和本地功能不受影响。Outlook V1 仅同步 Inbox：初次导入最新不超过 500 封邮件，随后使用 Microsoft Graph delta 收敛变化；文件和项目附件支持下载，云端引用附件会明确提示暂不支持。真实账号验收步骤见 [`doc/Outlook_Owner_Acceptance.zh-CN.md`](doc/Outlook_Owner_Acceptance.zh-CN.md)。
+
 ## 质量检查
 
 提交前运行：
