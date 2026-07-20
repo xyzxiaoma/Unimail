@@ -57,6 +57,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: 准备 Windows SQLCipher 构建依赖
