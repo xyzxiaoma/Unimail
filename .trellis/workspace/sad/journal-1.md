@@ -181,3 +181,45 @@ Implemented runtime-neutral durable synchronization, SQLCipher schema V2, genera
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Implement Outlook adapter and onboarding
+
+**Date**: 2026-07-20
+**Task**: Implement Outlook adapter and onboarding
+**Branch**: `main`
+
+### Summary
+
+Implemented Microsoft public-client OAuth, Graph latest-500 and delta sync, MIME attachments/read/send/reply, provider-aware desktop onboarding, safe credential handling, owner documentation, and cross-platform CI diagnostics. Verified Windows and macOS unsigned artifacts in Actions run 29754840479.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9d9d836` | (see git log) |
+| `cd3eff9` | (see git log) |
+| `dbae22a` | (see git log) |
+| `7ecc6f3` | (see git log) |
+| `5d50086` | (see git log) |
+| `e148fe2` | (see git log) |
+| `5c437a7` | (see git log) |
+| `c150ea8` | (see git log) |
+| `5cd14a4` | (see git log) |
+| `07c0f21` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
