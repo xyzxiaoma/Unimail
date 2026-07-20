@@ -76,8 +76,24 @@ jobs:
       - name: 校验变更路径与发布说明
         run: npm run check:changes
 
-      - name: 校验格式、类型、测试与 IPC 绑定
-        run: npm run ci:validate
+      - name: 校验前端格式、类型与测试
+        run: |
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm test
+
+      - name: 校验 IPC 绑定
+        run: npm run check:bindings
+
+      - name: 校验 Rust 格式
+        run: cargo fmt --all -- --check
+
+      - name: 校验 Rust Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: 运行 Rust 工作区测试
+        run: cargo test --workspace
 
       - name: 构建未签名测试安装包
         run: npm run tauri build
