@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Verify Graph OAuth/delta/immutable-ID/MIME/attachment/read/send/error behavior and Gmail compatibility."}
+{"file":".trellis/spec/backend/sync-offline-guidelines.md","reason":"Verify Outlook-only claims, invalid-delta bounded reset, cancellation, and no ambiguous-send retry."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify tokens remain outside SQLite and reconnect/compensation are crash-safe."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify provider-aware commands expose only fixed safe errors."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify provider choice, Outlook states, reconnect behavior, accessibility, and Chinese copy."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify no authorization URL/code/token/delta link/credential ref crosses the frontend boundary."}
+{"file":".trellis/tasks/07-19-outlook-adapter/research/microsoft-graph.md","reason":"Verify implementation and owner docs match current Microsoft protocol behavior."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/provider-integration.md","reason":"Verify provider conformance and parent V1 scope remain satisfied."}

@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Governs OAuth, provider cursors, MIME, attachments, retry, redaction, and terminal send outcomes."}
+{"file":".trellis/spec/backend/sync-offline-guidelines.md","reason":"Governs provider-aware claims, durable checkpoint reset, cancellation, and read-intent acknowledgement."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Governs credential references, account reconnect, repository compensation, and SQLite secret exclusion."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Governs safe Tauri errors and generated IPC contracts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Governs the accessible Simplified Chinese provider-choice onboarding surface."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Governs generated bindings, runtime decoding, and secret-free onboarding payloads."}
+{"file":".trellis/tasks/07-19-outlook-adapter/research/microsoft-graph.md","reason":"Records verified Microsoft public-client, redirect, immutable-ID, delta, MIME, attachment, send, and throttling behavior."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/provider-integration.md","reason":"Contains the parent-approved cross-provider Graph contract and secret-free testing strategy."}

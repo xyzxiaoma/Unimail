@@ -3,7 +3,7 @@
   "name": "outlook-adapter",
   "title": "Outlook Adapter",
   "description": "Implement Microsoft public-client OAuth, Graph delta synchronization, read state, attachments, send/reply, and owner test guidance.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
