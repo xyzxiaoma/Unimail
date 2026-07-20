@@ -59,8 +59,9 @@ the application database.
   read failure returns `CredentialStoreUnavailable`; neither condition generates a replacement.
   Only an existing database with SQLite `NotADatabase` after keying maps to
   `DatabaseKeyInvalid`.
-- Migration V1 is embedded at `migrations/0001_initial.sql`. It contains no token, password,
-  authorization-code, or database-key column.
+- Migrations V1 and V2 are immutable ordered files at `migrations/0001_initial.sql` and
+  `migrations/0002_sync_offline.sql`. Neither contains token, password, authorization-code, or
+  database-key columns.
 - Stable UUIDs are text primary keys. Messages enforce both provider identity uniqueness and a
   composite `(account_id, mailbox_id)` foreign key, so a message cannot reference another
   account's mailbox.
@@ -69,6 +70,16 @@ the application database.
 - `commit_sync_batch` stores normalized data, FTS projection, operation state, and cursor in one
   transaction. Post-commit cache maintenance must never make an already committed batch appear
   uncommitted.
+- V2 remote identity is `(account_id, provider_mailbox_id, provider_message_id)` and maps to one
+  stable local `MessageId`. `Gone` removes the live message and pending read intent but retains the
+  mapping and its monotonic read-intent generation for replay/reappearance.
+- `messages.remote_is_read` stores provider observation while `messages.is_read` stores effective
+  local state. A pending generation protects the effective value; sync observations never delete
+  a pending mutation. Only a lease- and generation-matched provider acknowledgement may clear it.
+- Sync checkpoints are stored as raw valid JSON. Claiming an operation consumes its current
+  trigger bits by clearing the durable bits to zero; triggers arriving while running are ORed into
+  the cleared field. The batch transaction commits when it remains zero or reschedules the same
+  operation incrementally when new bits arrived.
 - Account deletion is a persisted `credentials -> database -> attachments` state machine.
   Deleting accounts are hidden immediately; credential deletion, relational/FTS cascade, and
   safe cache-file deletion are idempotent and resume during repository initialization.
@@ -80,7 +91,7 @@ the application database.
 
 | Condition | Required repository result |
 | --- | --- |
-| New profile, credential store available | Generate/store one 32-byte key, migrate to V1 |
+| New profile, credential store available | Generate/store one 32-byte key, migrate to latest V2 |
 | Existing DB, credential entry missing | `DatabaseKeyUnavailable`; do not reset |
 | Credential backend locked/unavailable | `CredentialStoreUnavailable` |
 | Existing encrypted DB, wrong key (`NotADatabase`) | `DatabaseKeyInvalid` |
@@ -109,10 +120,12 @@ Internal SQL, keyring, path, and OS errors are never returned verbatim.
 - Real bundled SQLCipher: correct-key reopen, unkeyed/wrong-key failure, 256-bit key, capability
   probes, missing key, unavailable credential store, and concurrent first initialization.
 - Migrations: fresh-to-latest, latest-to-latest no-op, rollback on malformed migration, forbidden
-  secret-column scan, foreign keys, uniqueness, cascade, and schema version.
+  secret-column scan, V1 fixture preservation, foreign keys, uniqueness, cascade, and schema
+  version.
 - Repository: provider-message idempotency, deterministic keyset paging, cross-account rejection,
-  FTS update/rebuild/direct row count after cascade, draft revision conflict, and cursor/data
-  rollback/commit atomicity.
+  mailbox-scoped identity, replay/Gone/reappearance, FTS update/rebuild/direct row count after
+  cascade, draft revision conflict, desired-read generations, trigger consumption/follow-up,
+  cancellation fencing, account-wide running-lease exclusion, and mid-batch cursor/data rollback.
 - Cleanup: credential failure, attachment deletion failure, restart recovery, queued-key reuse,
   protected account-cleanup key rejection, path escape rejection, and absent-file idempotency.
 - Keep the native keyring contract test `#[ignore]` and manual; it must use an ephemeral reference,

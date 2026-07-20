@@ -7,9 +7,10 @@
 ```text
 Cargo.toml
 crates/
-├── unimail-core/       # Provider-neutral shared types and policy
-├── unimail-storage/    # SQLCipher, migrations, keyring, repositories, and cleanup recovery
-└── unimail-providers/  # Mail provider adapter boundary; not implemented yet
+├── unimail-core/        # Provider-neutral shared types and policy
+├── unimail-application/ # Runtime-neutral sync/offline orchestration; no send capability
+├── unimail-storage/     # SQLCipher, migrations, keyring, repositories, and cleanup recovery
+└── unimail-providers/   # Mail provider adapter boundary; not implemented yet
 src-tauri/
 ├── build.rs            # Tauri build integration only
 ├── capabilities/       # Window-scoped Tauri permissions
@@ -27,6 +28,9 @@ lints with `[lints] workspace = true`.
 - `unimail-core` owns provider-neutral IDs, mail/domain records, repository and credential ports,
   safe storage error/status DTOs, and application metadata. Its public exports are assembled in
   [`crates/unimail-core/src/lib.rs`](../../../crates/unimail-core/src/lib.rs).
+- `unimail-application` owns runtime-neutral synchronization coordination, retry policy,
+  concurrency permits, desired-read workers, and offline draft review gates. It depends only on
+  `unimail-core`; its `SyncProvider` deliberately has no `send` method.
 - `unimail-storage` owns SQLCipher connection creation, schema migrations, native/fake credential
   adapters, row mapping, FTS maintenance, repository transactions, and local cleanup recovery.
 - `unimail-providers` will own Gmail, Graph, IMAP, and SMTP adapters. Its current
@@ -42,12 +46,17 @@ Current crate dependencies establish this direction:
 
 ```text
 src-tauri ───────► unimail-core
+unimail-application ► unimail-core
 unimail-storage ─► unimail-core
 unimail-providers ► unimail-core
 ```
 
 Do not make `unimail-core` depend on Tauri, storage, or a provider. Do not bypass the core
 contract by returning adapter-specific objects directly from a Tauri command.
+
+Runtime composition may adapt `unimail-storage` and concrete providers into
+`unimail-application` ports, but the application crate must remain independent of Tokio, Tauri,
+SQLCipher, provider SDKs, and `MailProvider::send`.
 
 ## Naming and Placement
 

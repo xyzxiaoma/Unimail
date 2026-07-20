@@ -3,7 +3,7 @@
   "name": "sync-offline-core",
   "title": "Sync and Offline Core",
   "description": "Implement durable synchronization coordination, cursors, mutations, retries, cancellation, reconnect, and offline behavior.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

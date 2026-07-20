@@ -19,6 +19,7 @@ implemented integrations.
 | [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
 | [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, cursor safety, MIME budgets, fake conformance, and send ambiguity | Shared contract established |
+| [Sync and Offline Guidelines](./sync-offline-guidelines.md) | Durable sync orchestration, read intent generations, retry/cancellation, and offline send review | Sync core established |
 
 ## Pre-Development Checklist
 
@@ -29,13 +30,15 @@ Before changing backend code:
    provider behavior from marker functions or storage behavior from public names alone.
 3. For provider, authentication, sync-page, MIME, attachment-stream, or send changes, read
    [Provider and MIME Guidelines](./provider-guidelines.md) and run its conformance assertions.
-4. For a Tauri command or DTO change, read the seven-section scenario in
+4. For sync scheduling, checkpoints, desired-read mutations, reconnect, cancellation, or offline
+   draft review, read [Sync and Offline Guidelines](./sync-offline-guidelines.md).
+5. For a Tauri command or DTO change, read the seven-section scenario in
    [Error Handling](./error-handling.md), regenerate bindings, and update boundary tests.
-5. For storage work, keep SQL out of the UI and replace the deferred sections in
+6. For storage work, keep SQL out of the UI and replace the deferred sections in
    [Database Guidelines](./database-guidelines.md) only after schema code exists.
-6. Run the Rust quality commands in [Quality Guidelines](./quality-guidelines.md).
-7. If behavior is user-visible, update `CHANGELOG.zh-CN.md` under `未发布` in the same change.
-8. Never add credentials, mail data, databases, signing material, updater keys, or `.env`
+7. Run the Rust quality commands in [Quality Guidelines](./quality-guidelines.md).
+8. If behavior is user-visible, update `CHANGELOG.zh-CN.md` under `未发布` in the same change.
+9. Never add credentials, mail data, databases, signing material, updater keys, or `.env`
    files to source control.
 
 ## Primary References

@@ -158,7 +158,9 @@ SMTP replies, IMAP frames, OAuth responses, parser debug output, or `io::Error::
   size failures return fixed safe codes.
 - Fake/conformance tests: `<=500`, pagination, duplicate delivery, invalid cursor, tombstone,
   idempotent desired read state, cancellation without checkpoint, streamed attachments, and each
-  `SendOutcome` without automatic ambiguous retry.
+  `SendOutcome` without automatic ambiguous retry. Fake initial sync reconstructs a frozen scoped
+  live-message snapshot at the continuation sequence, sorts newest-first with a stable tie-break,
+  and never leaks another account/mailbox or later timeline changes into the snapshot.
 - Fixtures use reserved domains such as `example.com`/`unimail.invalid`; committed `.eml`/`.mbox`
   files are prohibited by the changed-path check.
 
