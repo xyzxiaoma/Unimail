@@ -211,16 +211,28 @@ pub struct RemoteMessageKey {
 }
 
 /// Normalized remote message without storage-owned IDs or sanitizer fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RemoteMessage {
     pub key: RemoteMessageKey,
-    pub mailbox_id: String,
     pub provider_revision: Option<ProviderRevision>,
     pub provider_thread_id: Option<String>,
     pub read: bool,
     pub sent_at_ms: Option<i64>,
     pub received_at_ms: i64,
     pub mime: NormalizedMimeMessage,
+}
+
+impl fmt::Debug for RemoteMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RemoteMessage")
+            .field("key", &self.key)
+            .field("has_provider_revision", &self.provider_revision.is_some())
+            .field("read", &self.read)
+            .field("sent_at_ms", &self.sent_at_ms)
+            .field("received_at_ms", &self.received_at_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One provider-observed change. User-triggered mailbox deletion is intentionally absent.
@@ -574,11 +586,12 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{CredentialRef, MimeCodec, Provider};
+    use crate::{AccountId, CredentialRef, MimeBody, MimeCodec, NormalizedMimeMessage, Provider};
 
     use super::{
         AccountAuthenticator, AuthenticatedAccount, InitialSyncLimit, MailProvider,
-        OpaqueProviderCursor, ProviderRevision, ReconciliationKey, SensitiveString,
+        OpaqueProviderCursor, ProviderRevision, ReconciliationKey, RemoteMessage, RemoteMessageKey,
+        SensitiveString,
     };
 
     #[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -678,6 +691,45 @@ mod tests {
             "private-credential-ref",
             "private-etag",
             "private-message-id@example.com",
+        ] {
+            assert!(!debug.contains(private));
+        }
+    }
+
+    #[test]
+    fn remote_message_debug_omits_revision_and_mail_content() {
+        let message = RemoteMessage {
+            key: RemoteMessageKey {
+                account_id: AccountId::new(),
+                provider_mailbox_id: "inbox".to_owned(),
+                provider_message_id: "message-1".to_owned(),
+            },
+            provider_revision: Some(ProviderRevision::new("private-revision")),
+            provider_thread_id: Some("private-thread".to_owned()),
+            read: false,
+            sent_at_ms: None,
+            received_at_ms: 1,
+            mime: NormalizedMimeMessage {
+                subject: Some("private-subject".to_owned()),
+                message_id: Some("private-rfc-id".to_owned()),
+                in_reply_to: None,
+                references: Vec::new(),
+                addresses: Vec::new(),
+                body: MimeBody {
+                    plain: Some("private-body".to_owned()),
+                    html: None,
+                },
+                attachments: Vec::new(),
+            },
+        };
+        let debug = format!("{message:?}");
+
+        for private in [
+            "private-revision",
+            "private-thread",
+            "private-subject",
+            "private-rfc-id",
+            "private-body",
         ] {
             assert!(!debug.contains(private));
         }

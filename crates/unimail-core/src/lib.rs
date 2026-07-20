@@ -11,13 +11,19 @@ use ts_rs::TS;
 
 pub use domain::{
     Account, AccountAuthState, AccountCreateInput, AddressRole, Attachment, AttachmentInput,
-    CredentialRef, DeleteAccountResult, Draft, DraftAddress, DraftAttachmentInput, DraftSaveInput,
-    DraftSummary, Mailbox, MailboxRole, MailboxUpsertInput, MessageAddress, MessageAddressInput,
-    MessageDetail, MessageDirection, MessageListInput, MessagePage, MessagePageCursor,
-    MessageReadStateInput, MessageSummary, MessageUpsertInput, MessageUpsertResult, Provider,
-    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey,
+    ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
+    CredentialRef, DeleteAccountResult, DesiredReadMutation, DesiredReadMutationState, Draft,
+    DraftAddress, DraftAttachmentInput, DraftSaveInput, DraftSendReview, DraftSendReviewKey,
+    DraftSendReviewReason, DraftSummary, LeaseRecoveryResult, Mailbox, MailboxRole,
+    MailboxUpsertInput, MessageAddress, MessageAddressInput, MessageDetail, MessageDirection,
+    MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput, MessageSummary,
+    MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput, OfflineDraftReviewResult,
+    OperationLease, Provider, ReadIntentGeneration, SafeErrorCode, ScheduleSyncInput,
+    SendConfirmationRequired, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode,
+    SyncOperation, SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
+    TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
-pub use ids::{AccountId, AttachmentId, DraftId, MailboxId, MessageId, OperationId};
+pub use ids::{AccountId, AttachmentId, DraftId, LeaseId, MailboxId, MessageId, OperationId};
 pub use mime::{
     AttachmentContent, ComposedMessage, DeliveryEnvelope, MimeAddress, MimeAddressEntry,
     MimeAddressRole, MimeAttachment, MimeBody, MimeCodec, MimeError, MimeErrorKind, MimeLimits,

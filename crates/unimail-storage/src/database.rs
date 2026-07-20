@@ -423,7 +423,10 @@ mod tests {
                 .len(),
             32
         );
-        assert_eq!(store.capabilities().schema_version, 1);
+        assert_eq!(
+            store.capabilities().schema_version,
+            crate::migration::SCHEMA_VERSION
+        );
         assert!(!store.capabilities().cipher_version.is_empty());
         assert!(store.capabilities().fts5_available);
     }
@@ -457,7 +460,10 @@ mod tests {
                     let store =
                         EncryptedStore::initialize(&ConnectionFactory::fake(path, credentials))
                             .expect("concurrent initialization");
-                    assert_eq!(store.capabilities().schema_version, 1);
+                    assert_eq!(
+                        store.capabilities().schema_version,
+                        crate::migration::SCHEMA_VERSION
+                    );
                 })
             })
             .collect::<Vec<_>>();

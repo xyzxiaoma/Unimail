@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/unimail-application",
   "crates/unimail-core",
   "crates/unimail-storage",
   "crates/unimail-providers",

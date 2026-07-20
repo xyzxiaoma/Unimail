@@ -4367,6 +4367,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unimail-application"
+version = "0.1.0"
+dependencies = [
+ "unimail-core",
+ "unimail-providers",
+]
+
+[[package]]
 name = "unimail-core"
 version = "0.1.0"
 dependencies = [

@@ -281,7 +281,11 @@ impl MailProvider for FakeMailProvider {
             take_failure(&mut state, FakeOperation::InitialSync)?;
 
             let (offset, snapshot, original_limit) = match request.continuation.as_ref() {
-                Some(continuation) => parse_triplet(continuation.cursor())?,
+                Some(continuation) => parse_scoped_cursor(
+                    continuation.cursor(),
+                    request.account_id,
+                    &request.mailbox_id,
+                )?,
                 None => (0, current_sequence(&state), u64::from(request.limit.get())),
             };
             if original_limit != u64::from(request.limit.get()) {
@@ -291,13 +295,14 @@ impl MailProvider for FakeMailProvider {
                 ));
             }
 
-            build_page(
+            build_initial_page(
                 &mut state,
-                0,
                 offset,
                 snapshot,
                 original_limit,
                 original_limit,
+                request.account_id,
+                &request.mailbox_id,
             )
         })
     }
@@ -324,7 +329,11 @@ impl MailProvider for FakeMailProvider {
             }
 
             let (offset, snapshot, continued_base) = match request.continuation.as_ref() {
-                Some(continuation) => parse_triplet(continuation.cursor())?,
+                Some(continuation) => parse_scoped_cursor(
+                    continuation.cursor(),
+                    request.account_id,
+                    &request.mailbox_id,
+                )?,
                 None => (0, current_sequence(&state), base),
             };
             if continued_base != base {
@@ -334,7 +343,15 @@ impl MailProvider for FakeMailProvider {
                 ));
             }
 
-            build_page(&mut state, base, offset, snapshot, u64::MAX, base)
+            build_incremental_page(
+                &mut state,
+                base,
+                offset,
+                snapshot,
+                base,
+                request.account_id,
+                &request.mailbox_id,
+            )
         })
     }
 
@@ -601,21 +618,98 @@ impl AccountAuthenticator for FakeAuthenticator {
     }
 }
 
-fn build_page(
+fn build_initial_page(
     state: &mut FakeProviderState,
-    base: u64,
     offset: u64,
     snapshot: u64,
     maximum: u64,
     continuation_anchor: u64,
+    account_id: unimail_core::AccountId,
+    mailbox_id: &str,
 ) -> ProviderResult<SyncPage> {
-    let eligible: Vec<RemoteChange> = state
+    let mut messages = HashMap::new();
+    for entry in state
+        .changes
+        .iter()
+        .filter(|entry| entry.sequence <= snapshot)
+        .filter(|entry| {
+            let key = remote_change_key(&entry.change);
+            key.account_id == account_id && key.provider_mailbox_id == mailbox_id
+        })
+    {
+        apply_change_to_messages(&mut messages, &entry.change);
+    }
+
+    let mut snapshot_messages = messages.into_values().collect::<Vec<_>>();
+    snapshot_messages.sort_by(|left, right| {
+        right
+            .received_at_ms
+            .cmp(&left.received_at_ms)
+            .then_with(|| {
+                left.key
+                    .provider_message_id
+                    .cmp(&right.key.provider_message_id)
+            })
+    });
+    let mut eligible = snapshot_messages
+        .into_iter()
+        .map(|message| RemoteChange::Upsert(Box::new(message)))
+        .collect::<Vec<_>>();
+    eligible.truncate(usize::try_from(maximum).unwrap_or(usize::MAX));
+
+    paginate_changes(
+        state,
+        &eligible,
+        offset,
+        snapshot,
+        continuation_anchor,
+        account_id,
+        mailbox_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_incremental_page(
+    state: &mut FakeProviderState,
+    base: u64,
+    offset: u64,
+    snapshot: u64,
+    continuation_anchor: u64,
+    account_id: unimail_core::AccountId,
+    mailbox_id: &str,
+) -> ProviderResult<SyncPage> {
+    let eligible = state
         .changes
         .iter()
         .filter(|entry| entry.sequence > base && entry.sequence <= snapshot)
+        .filter(|entry| {
+            let key = remote_change_key(&entry.change);
+            key.account_id == account_id && key.provider_mailbox_id == mailbox_id
+        })
         .map(|entry| entry.change.clone())
-        .take(usize::try_from(maximum).unwrap_or(usize::MAX))
-        .collect();
+        .collect::<Vec<_>>();
+
+    paginate_changes(
+        state,
+        &eligible,
+        offset,
+        snapshot,
+        continuation_anchor,
+        account_id,
+        mailbox_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paginate_changes(
+    state: &mut FakeProviderState,
+    eligible: &[RemoteChange],
+    offset: u64,
+    snapshot: u64,
+    continuation_anchor: u64,
+    account_id: unimail_core::AccountId,
+    mailbox_id: &str,
+) -> ProviderResult<SyncPage> {
     let start = usize::try_from(offset).map_err(|_| cursor_protocol_error())?;
     if start > eligible.len() {
         return Err(cursor_protocol_error());
@@ -637,13 +731,22 @@ fn build_page(
             end as u64,
             snapshot,
             continuation_anchor,
+            scope_hash(account_id, mailbox_id),
         )?))
     } else {
         SyncPageState::Complete(DurableCheckpoint::new(cursor_checkpoint(snapshot)?))
     };
 
     Ok(SyncPage {
-        mailboxes: state.mailboxes.clone(),
+        mailboxes: state
+            .mailboxes
+            .iter()
+            .filter(|mailbox| {
+                mailbox.key.account_id == account_id
+                    && mailbox.key.provider_mailbox_id == mailbox_id
+            })
+            .cloned()
+            .collect(),
         changes,
         state: state_value,
     })
@@ -685,8 +788,13 @@ fn cursor_checkpoint(sequence: u64) -> ProviderResult<OpaqueProviderCursor> {
     OpaqueProviderCursor::from_json(sequence.to_string())
 }
 
-fn cursor_triplet(first: u64, second: u64, third: u64) -> ProviderResult<OpaqueProviderCursor> {
-    OpaqueProviderCursor::from_json(format!("[{first},{second},{third}]"))
+fn cursor_triplet(
+    first: u64,
+    second: u64,
+    third: u64,
+    scope: u64,
+) -> ProviderResult<OpaqueProviderCursor> {
+    OpaqueProviderCursor::from_json(format!("[{first},{second},{third},{scope}]"))
 }
 
 fn parse_checkpoint(checkpoint: &DurableCheckpoint) -> ProviderResult<u64> {
@@ -697,7 +805,11 @@ fn parse_checkpoint(checkpoint: &DurableCheckpoint) -> ProviderResult<u64> {
         .map_err(|_| cursor_protocol_error())
 }
 
-fn parse_triplet(cursor: &OpaqueProviderCursor) -> ProviderResult<(u64, u64, u64)> {
+fn parse_scoped_cursor(
+    cursor: &OpaqueProviderCursor,
+    account_id: unimail_core::AccountId,
+    mailbox_id: &str,
+) -> ProviderResult<(u64, u64, u64)> {
     let value = cursor.as_json();
     let inner = value
         .strip_prefix('[')
@@ -710,9 +822,29 @@ fn parse_triplet(cursor: &OpaqueProviderCursor) -> ProviderResult<(u64, u64, u64
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| cursor_protocol_error())?;
     match values.as_slice() {
-        [first, second, third] => Ok((*first, *second, *third)),
+        [first, second, third, scope] if *scope == scope_hash(account_id, mailbox_id) => {
+            Ok((*first, *second, *third))
+        }
         _ => Err(cursor_protocol_error()),
     }
+}
+
+fn remote_change_key(change: &RemoteChange) -> &RemoteMessageKey {
+    match change {
+        RemoteChange::Upsert(message) => &message.key,
+        RemoteChange::ReadState { key, .. } | RemoteChange::Gone(key) => key,
+    }
+}
+
+fn scope_hash(account_id: unimail_core::AccountId, mailbox_id: &str) -> u64 {
+    account_id
+        .to_string()
+        .bytes()
+        .chain([0])
+        .chain(mailbox_id.bytes())
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
 }
 
 fn take_failure(state: &mut FakeProviderState, operation: FakeOperation) -> ProviderResult<()> {

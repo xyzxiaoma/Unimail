@@ -6,10 +6,14 @@ use thiserror::Error;
 use ts_rs::TS;
 
 use crate::{
-    Account, AccountCreateInput, AccountId, DeleteAccountResult, Draft, DraftId, DraftSaveInput,
-    DraftSummary, Mailbox, MailboxUpsertInput, MessageDetail, MessageId, MessageListInput,
-    MessagePage, MessageReadStateInput, MessageUpsertInput, MessageUpsertResult, SyncBatchInput,
-    SyncBatchResult, SyncCursor, SyncCursorKey,
+    Account, AccountCreateInput, AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    CompleteDesiredReadMutationInput, DeleteAccountResult, DesiredReadMutation, Draft, DraftId,
+    DraftSaveInput, DraftSendReviewKey, DraftSummary, LeaseRecoveryResult, Mailbox,
+    MailboxUpsertInput, MessageDetail, MessageId, MessageListInput, MessagePage,
+    MessageReadStateInput, MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput,
+    OfflineDraftReviewResult, OperationId, ScheduleSyncInput, SendConfirmationRequired,
+    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
+    SyncOperationSummary, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
 /// Owned secret bytes whose debug representation and formatting do not reveal the value.
@@ -311,7 +315,52 @@ pub trait StorageRepository: Send + Sync {
     /// # Errors
     ///
     /// Returns a repository category when validation or persistence fails.
-    fn set_message_read(&self, input: MessageReadStateInput) -> RepositoryResult<bool>;
+    fn set_message_read(
+        &self,
+        input: MessageReadStateInput,
+    ) -> RepositoryResult<DesiredReadMutation>;
+
+    /// Lists due desired-read assignments for one account without claiming them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_due_desired_read_mutations(
+        &self,
+        account_id: AccountId,
+        now_ms: i64,
+        limit: u32,
+    ) -> RepositoryResult<Vec<DesiredReadMutation>>;
+
+    /// Claims exactly the requested desired-read generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the lease cannot be persisted safely.
+    fn claim_desired_read_mutation(
+        &self,
+        input: ClaimDesiredReadMutationInput,
+    ) -> RepositoryResult<Option<DesiredReadMutation>>;
+
+    /// Completes a desired-read assignment only when generation and lease still match.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when acknowledgement cannot be committed atomically.
+    fn complete_desired_read_mutation(
+        &self,
+        input: CompleteDesiredReadMutationInput,
+    ) -> RepositoryResult<bool>;
+
+    /// Persists retry, authentication, or terminal state for the same leased generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the guarded transition cannot be written.
+    fn transition_desired_read_mutation(
+        &self,
+        input: TransitionDesiredReadMutationInput,
+    ) -> RepositoryResult<bool>;
 
     /// Creates or revision-checks and updates a draft.
     ///
@@ -342,12 +391,138 @@ pub trait StorageRepository: Send + Sync {
     /// Returns a repository category when storage cannot be updated.
     fn delete_draft(&self, draft_id: DraftId) -> RepositoryResult<bool>;
 
+    /// Saves the latest draft and records its offline review marker in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RepositoryError::RevisionConflict` for a stale expected revision.
+    fn save_draft_for_offline_review(
+        &self,
+        input: OfflineDraftReviewInput,
+    ) -> RepositoryResult<OfflineDraftReviewResult>;
+
+    /// Lists current revision-matched offline review markers only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_send_confirmation_required(
+        &self,
+        account_id: Option<AccountId>,
+    ) -> RepositoryResult<Vec<SendConfirmationRequired>>;
+
+    /// Consumes a marker only when the draft revision still matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be updated.
+    fn consume_draft_send_review(&self, key: DraftSendReviewKey) -> RepositoryResult<bool>;
+
     /// Reads an opaque provider cursor for an account scope.
     ///
     /// # Errors
     ///
     /// Returns a repository category when storage cannot be queried.
     fn get_sync_cursor(&self, key: &SyncCursorKey) -> RepositoryResult<Option<SyncCursor>>;
+
+    /// Creates or trigger-coalesces one durable synchronization operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when scheduling cannot be persisted.
+    fn schedule_sync_operation(&self, input: ScheduleSyncInput) -> RepositoryResult<SyncOperation>;
+
+    /// Lists due operation summaries in deterministic storage order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_runnable_sync_operations(
+        &self,
+        now_ms: i64,
+        limit: u32,
+    ) -> RepositoryResult<Vec<SyncOperationSummary>>;
+
+    /// Claims one due operation when it has no unexpired competing lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the lease cannot be persisted safely.
+    fn claim_sync_operation(
+        &self,
+        input: ClaimSyncOperationInput,
+    ) -> RepositoryResult<Option<SyncOperation>>;
+
+    /// Applies a lease-guarded state transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the guarded transition cannot be written.
+    fn transition_sync_operation(
+        &self,
+        input: TransitionSyncOperationInput,
+    ) -> RepositoryResult<bool>;
+
+    /// Durably increments cancellation generation for cooperative workers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the cancellation request cannot be persisted.
+    fn request_sync_cancellation(
+        &self,
+        operation_id: OperationId,
+        requested_at_ms: i64,
+    ) -> RepositoryResult<bool>;
+
+    /// Moves runnable/running work for an account to the durable offline hint state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the offline fence cannot be persisted.
+    fn mark_account_offline(
+        &self,
+        account_id: AccountId,
+        updated_at_ms: i64,
+    ) -> RepositoryResult<u32>;
+
+    /// Reschedules existing offline work after confirmed connectivity restoration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when existing offline work cannot be resumed.
+    fn restore_account_connectivity(
+        &self,
+        account_id: AccountId,
+        updated_at_ms: i64,
+    ) -> RepositoryResult<u32>;
+
+    /// Reads one safe operation summary for UI reload or dropped-event recovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn get_sync_operation(
+        &self,
+        operation_id: OperationId,
+    ) -> RepositoryResult<Option<SyncOperationSummary>>;
+
+    /// Lists safe operation summaries for one account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_sync_operations(
+        &self,
+        account_id: AccountId,
+        limit: u32,
+    ) -> RepositoryResult<Vec<SyncOperationSummary>>;
+
+    /// Reclaims expired synchronization and desired-read leases after startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when recovery cannot be committed.
+    fn recover_expired_leases(&self, now_ms: i64) -> RepositoryResult<LeaseRecoveryResult>;
 
     /// Commits normalized mail changes and cursor advancement in one transaction.
     ///
@@ -366,9 +541,19 @@ pub trait StorageRepository: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
-        CredentialStoreKind, RepositoryError, StorageCommandError, StorageErrorCode, StorageStatus,
+        CredentialStoreKind, RepositoryError, StorageCommandError, StorageErrorCode,
+        StorageRepository, StorageStatus,
     };
+
+    #[test]
+    fn storage_repository_remains_arc_object_safe() {
+        fn accepts_repository(_repository: Option<Arc<dyn StorageRepository>>) {}
+
+        accepts_repository(None);
+    }
 
     #[test]
     fn storage_status_uses_the_public_camel_case_shape() {

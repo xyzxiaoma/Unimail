@@ -232,18 +232,26 @@ mod tests {
     }
 
     fn message(account_id: AccountId, id: &str, read: bool) -> RemoteMessage {
+        message_received_at(account_id, id, read, 1)
+    }
+
+    fn message_received_at(
+        account_id: AccountId,
+        id: &str,
+        read: bool,
+        received_at_ms: i64,
+    ) -> RemoteMessage {
         RemoteMessage {
             key: RemoteMessageKey {
                 account_id,
                 provider_mailbox_id: "inbox".to_owned(),
                 provider_message_id: id.to_owned(),
             },
-            mailbox_id: "inbox".to_owned(),
             provider_revision: None,
             provider_thread_id: None,
             read,
             sent_at_ms: None,
-            received_at_ms: 1,
+            received_at_ms,
             mime: NormalizedMimeMessage {
                 subject: Some("Fictional subject".to_owned()),
                 message_id: Some(format!("<{id}@example.com>")),
@@ -348,6 +356,205 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn initial_sync_is_scope_bound_and_newest_first() {
+        let account_id = AccountId::new();
+        let other_account = AccountId::new();
+        let provider = FakeMailProvider::new(Provider::Gmail, 1);
+        let old = message_received_at(account_id, "old", false, 10);
+        let mut archive = message(account_id, "archive", false);
+        archive.key.provider_mailbox_id = "archive".to_owned();
+        let other = message(other_account, "other-account", false);
+        let newest = message_received_at(account_id, "newest", false, 20);
+        for change in [newest.clone(), archive, other, old.clone()] {
+            provider
+                .push_change(RemoteChange::Upsert(Box::new(change)))
+                .expect("seed scoped change");
+        }
+        let cancellation = FakeCancellation::default();
+
+        let collected = block_on(collect_initial_sync(
+            &provider,
+            initial_request(account_id, 10),
+            &cancellation,
+        ))
+        .expect("collect scoped initial sync");
+        let ids = collected
+            .changes
+            .iter()
+            .map(|change| match change {
+                RemoteChange::Upsert(message) => message.key.provider_message_id.as_str(),
+                _ => panic!("initial fixture should contain upserts"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["newest", "old"]);
+
+        let first = block_on(provider.initial_sync(initial_request(account_id, 10), &cancellation))
+            .expect("first scoped page");
+        let unimail_core::SyncPageState::More(continuation) = first.state else {
+            panic!("page size one should produce a continuation");
+        };
+        let mut switched = initial_request(other_account, 10);
+        switched.continuation = Some(continuation);
+        assert_eq!(
+            block_on(provider.initial_sync(switched, &cancellation))
+                .expect_err("continuation must remain scope-bound")
+                .kind,
+            ProviderErrorKind::Protocol
+        );
+    }
+
+    #[test]
+    fn initial_sync_reduces_history_to_live_upserts_with_stable_ties() {
+        let account_id = AccountId::new();
+        let provider = FakeMailProvider::new(Provider::Gmail, 10);
+        let newest = message_received_at(account_id, "newest", false, 30);
+        let tie_b = message_received_at(account_id, "tie-b", false, 20);
+        let tie_a = message_received_at(account_id, "tie-a", false, 20);
+        let gone = message_received_at(account_id, "gone", false, 40);
+
+        for change in [
+            RemoteChange::Upsert(Box::new(newest.clone())),
+            RemoteChange::Upsert(Box::new(tie_b.clone())),
+            RemoteChange::Upsert(Box::new(tie_a.clone())),
+            RemoteChange::Upsert(Box::new(gone.clone())),
+            RemoteChange::ReadState {
+                key: newest.key.clone(),
+                read: true,
+                revision: None,
+            },
+            RemoteChange::Gone(gone.key),
+        ] {
+            provider.push_change(change).expect("seed message history");
+        }
+
+        let collected = block_on(collect_initial_sync(
+            &provider,
+            initial_request(account_id, 10),
+            &FakeCancellation::default(),
+        ))
+        .expect("collect reduced initial snapshot");
+        let messages = collected
+            .changes
+            .iter()
+            .map(|change| match change {
+                RemoteChange::Upsert(message) => message.as_ref(),
+                _ => panic!("initial snapshot must contain only live upserts"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.key.provider_message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newest", "tie-a", "tie-b"]
+        );
+        assert!(messages[0].read);
+    }
+
+    #[test]
+    fn initial_sync_never_exceeds_the_maximum_live_message_limit() {
+        let account_id = AccountId::new();
+        let provider = FakeMailProvider::new(Provider::Gmail, 127);
+        for index in 0..501 {
+            provider
+                .push_change(RemoteChange::Upsert(Box::new(message_received_at(
+                    account_id,
+                    &format!("message-{index:03}"),
+                    false,
+                    i64::from(index),
+                ))))
+                .expect("seed bounded initial snapshot");
+        }
+
+        let collected = block_on(collect_initial_sync(
+            &provider,
+            initial_request(account_id, 500),
+            &FakeCancellation::default(),
+        ))
+        .expect("collect maximum initial snapshot");
+
+        assert_eq!(collected.changes.len(), 500);
+        assert!(matches!(
+            collected.changes.first(),
+            Some(RemoteChange::Upsert(message))
+                if message.key.provider_message_id == "message-500"
+        ));
+        assert!(collected.changes.iter().all(|change| {
+            !matches!(
+                change,
+                RemoteChange::Upsert(message)
+                    if message.key.provider_message_id == "message-000"
+            )
+        }));
+    }
+
+    #[test]
+    fn initial_continuation_is_frozen_while_incremental_keeps_timeline_order() {
+        let account_id = AccountId::new();
+        let provider = FakeMailProvider::new(Provider::Gmail, 1);
+        let newest = message_received_at(account_id, "newest", false, 20);
+        let older = message_received_at(account_id, "older", false, 10);
+        provider
+            .push_change(RemoteChange::Upsert(Box::new(newest.clone())))
+            .expect("seed newest message");
+        provider
+            .push_change(RemoteChange::Upsert(Box::new(older.clone())))
+            .expect("seed older message");
+        let cancellation = FakeCancellation::default();
+
+        let request = initial_request(account_id, 10);
+        let first = block_on(provider.initial_sync(request.clone(), &cancellation))
+            .expect("first initial page");
+        assert!(matches!(
+            first.changes.as_slice(),
+            [RemoteChange::Upsert(message)]
+                if message.key.provider_message_id == "newest"
+        ));
+        let unimail_core::SyncPageState::More(continuation) = first.state else {
+            panic!("two-message snapshot should continue");
+        };
+
+        let later = message_received_at(account_id, "later", false, 30);
+        provider
+            .push_change(RemoteChange::Gone(older.key.clone()))
+            .expect("remove older after snapshot");
+        provider
+            .push_change(RemoteChange::Upsert(Box::new(later.clone())))
+            .expect("add later message after snapshot");
+
+        let mut continued_request = request;
+        continued_request.continuation = Some(continuation);
+        let continued = block_on(provider.initial_sync(continued_request, &cancellation))
+            .expect("continued initial page");
+        assert!(matches!(
+            continued.changes.as_slice(),
+            [RemoteChange::Upsert(message)]
+                if message.key.provider_message_id == "older"
+        ));
+        let unimail_core::SyncPageState::Complete(checkpoint) = continued.state else {
+            panic!("frozen snapshot should complete");
+        };
+
+        let incremental = block_on(collect_incremental_sync(
+            &provider,
+            IncrementalSyncRequest {
+                account_id,
+                mailbox_id: "inbox".to_owned(),
+                cursor: checkpoint,
+                continuation: None,
+            },
+            &cancellation,
+        ))
+        .expect("collect changes after frozen snapshot");
+        assert!(matches!(
+            incremental.changes.as_slice(),
+            [RemoteChange::Gone(key), RemoteChange::Upsert(message)]
+                if key == &older.key && message.key == later.key
+        ));
     }
 
     #[test]

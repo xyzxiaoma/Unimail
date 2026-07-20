@@ -1,0 +1,15 @@
+[package]
+name = "unimail-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+unimail-core = { path = "../unimail-core" }
+
+[dev-dependencies]
+unimail-providers = { path = "../unimail-providers" }
+
+[lints]
+workspace = true
