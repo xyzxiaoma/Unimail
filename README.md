@@ -1,6 +1,6 @@
 # Unimail
 
-Unimail 是一个以简体中文为首发界面语言的跨平台桌面邮件客户端。本仓库当前处于工程基础建设阶段，Windows 和 macOS 安装包仅用于测试，不代表已经完成代码签名、公证或自动更新集成。
+Unimail 是一个以简体中文为首发界面语言的跨平台桌面邮件客户端。本仓库正在按 V1 规格逐项实现；Windows 和 macOS 安装包仅用于测试，不代表已经完成代码签名、公证或自动更新集成。
 
 ## 环境要求
 
@@ -27,6 +27,29 @@ npm run dev
 ```powershell
 npm run tauri dev
 ```
+
+## Gmail 接入配置
+
+Gmail 使用 Google “桌面应用”类型的 OAuth 公开客户端、系统浏览器、PKCE 和本机回环回调。应用只需要 OAuth client ID，绝不需要或读取 client secret。
+
+1. 在 Google Cloud Console 配置 OAuth consent screen，并创建类型为 `Desktop app` 的 OAuth client。
+2. 在启动或构建 Unimail 的同一终端设置公开 client ID：
+
+```powershell
+$env:UNIMAIL_GMAIL_CLIENT_ID="你的公开桌面客户端ID"
+npm run tauri dev
+```
+
+macOS/Linux shell 可使用：
+
+```bash
+export UNIMAIL_GMAIL_CLIENT_ID="你的公开桌面客户端ID"
+npm run tauri dev
+```
+
+该值可以在运行时提供，也可以在构建安装包时编译进应用。未配置 client ID 时，应用仍能正常构建、安装和使用本地功能，Gmail 设置界面会明确显示当前构建未配置 Gmail 接入。
+
+Unimail V1 请求 `gmail.modify` 与 `gmail.send`，令牌仅写入 Windows Credential Manager 或 macOS Keychain，本地 SQLCipher 数据库只保存不含令牌的凭据引用。真实账号验收步骤见 [`doc/Gmail_Owner_Acceptance.zh-CN.md`](doc/Gmail_Owner_Acceptance.zh-CN.md)。
 
 ## 质量检查
 

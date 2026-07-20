@@ -161,3 +161,68 @@ const status = decodeStorageStatus(await storageStatus());
 - Handwritten copies of generated DTOs.
 - Manual edits to `src/lib/ipc/bindings.ts`.
 - Returning a typed success fallback after an IPC rejection.
+
+## Mandatory Seven-Section Scenario: Gmail onboarding IPC
+
+### 1. Scope / Trigger
+
+This applies to Gmail onboarding DTOs, Tauri command names, generated bindings, runtime decoders,
+the account dialog, and account-summary restoration.
+
+### 2. Signature and Flow
+
+```text
+gmail_onboarding_status / start_gmail_onboarding / cancel_gmail_onboarding / connected_accounts
+  -> Promise<unknown>
+  -> decodeGmailOnboardingStatus / decodeConnectedAccounts
+  -> GmailOnboardingDialog / App account entry
+```
+
+### 3. Contract
+
+- React receives only safe state, flow ID, account summary, and fixed error envelope. It never
+  receives authorization URLs, callback URLs, state, code, verifier, token, or credential ref.
+- Active states require a non-empty flow ID. The `connected` terminal state requires `flowId=null`,
+  one Gmail account summary, and no error.
+- Safe account summaries retain `needs_authentication` accounts so the sidebar can expose the
+  explicit reconnect path; filtering them out makes the recovery UI unreachable.
+- A retained `connected` terminal status must still offer an explicit connect/reconnect button
+  when the dialog is opened again.
+
+### 4. Validation & Error Matrix
+
+| Payload condition | Frontend behavior |
+| --- | --- |
+| Unknown state/provider/auth state/error code | Throw `TypeError` |
+| Fixed error message or retryability drifts | Throw `TypeError` |
+| Active state has null/empty flow ID | Throw `TypeError` |
+| Connected state has non-null flow ID, no Gmail account, or an error | Throw `TypeError` |
+| Command rejects with an unverified value | Display generic Chinese unavailable copy; never render payload text |
+
+### 5. Good / Base / Bad Cases
+
+- Good: OAuth success serializes `{ state: "connected", flowId: null, account, error: null }`,
+  the decoder accepts it, and reopening the dialog can reconnect that account.
+- Base: an account with `needs_authentication` remains visible and is labelled “重新连接 Gmail”.
+- Bad: the backend retains the completed flow ID, or `connected_accounts` filters out the account
+  precisely when authentication expires.
+
+### 6. Tests Required
+
+- Decoder tables cover every lifecycle state, exact fixed errors, invalid combinations, and safe
+  rejection preservation.
+- Tauri tests assert connected terminal `flow_id=None` and needs-auth summaries remain listed.
+- Component/App tests assert polling stops at connected, reopening can reconnect, revoked accounts
+  retain the reconnect entry, Escape cancellation, focus containment, and unverified errors do not
+  leak.
+- Run format, lint, typecheck, frontend tests, binding drift, build, and changed-release-note checks.
+
+### 7. Wrong vs Correct
+
+```tsx
+// Wrong: a completed backend status becomes undecodable and recovery disappears.
+{ state: "connected", flowId: "stale-flow", account, error: null }
+
+// Correct: terminal status is secret-free and restartable.
+{ state: "connected", flowId: null, account, error: null }
+```

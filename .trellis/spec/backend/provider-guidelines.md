@@ -208,3 +208,84 @@ enum SendOutcome {
 
 The correct model makes cursor persistence and ambiguous-send safety structural rather than a
 comment each adapter can accidentally ignore.
+
+## Scenario: Gmail desktop OAuth and REST adapter
+
+### 1. Scope / Trigger
+
+Apply this scenario when changing `crates/unimail-providers/src/gmail/**`, Gmail account routing,
+or the desktop OAuth composition. Production code uses fixed Google endpoints; localhost endpoint
+injection remains test-only.
+
+### 2. Signatures
+
+```rust
+GmailAuthenticator::new(config, credential_store) -> ProviderResult<Self>
+GmailProvider::new(config, credential_store, registry, mime) -> ProviderResult<Self>
+GmailCredentialManager::access_token(reference, force_refresh, cancellation)
+```
+
+The only public configuration value is `UNIMAIL_GMAIL_CLIENT_ID`. There is no client-secret
+field, environment key, constructor argument, or frontend DTO.
+
+### 3. Contracts
+
+- Authorization uses system browser + PKCE S256 + random state + one-use `127.0.0.1` callback,
+  requesting exactly `gmail.modify` and `gmail.send` with offline consent.
+- Google token payloads are OAuth snake_case (`access_token`, `expires_in`, `refresh_token`,
+  `token_type`), unlike Gmail REST resources, which use camelCase. Empty access tokens, zero
+  expiry, non-Bearer token types, missing refresh capability, and missing required scopes are
+  protocol/authentication failures and are never persisted.
+- Refresh is per-credential single-flight. A completed refresh is detected by token, refresh
+  token, or expiry-envelope change, because Google may reuse an access-token string.
+- Every message/full/modify/attachment response is bound back to the requested Gmail message ID.
+  Empty History record/message IDs are rejected before producing a remote key or revision.
+- General Gmail JSON and attachment JSON use separate bounded limits. Attachment envelopes may
+  exceed the normal metadata limit but remain bounded by the base64 expansion of the decoded
+  attachment limit plus fixed JSON overhead.
+- A 2xx send without a valid Gmail message ID is `UnknownAfterSubmission`, never `Accepted` or a
+  retryable provider error.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Missing public client ID | `Permanent / gmail_not_configured`; desktop remains usable |
+| Token field naming/type/value is invalid | `Protocol / gmail_token_response_invalid` or `gmail_malformed_response` |
+| Refresh token omitted during refresh | Retain previous refresh token |
+| Refreshed envelope cannot be written | `Permanent / gmail_credential_write_failed`; do not return new access token |
+| Requested and returned message IDs differ | `Protocol / gmail_message_identity_invalid` |
+| Attachment response exceeds its explicit bound | `Protocol / gmail_response_too_large` or `gmail_attachment_too_large` |
+| Send transport/result is ambiguous or success ID is absent | `UnknownAfterSubmission` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: one localhost contract test exchanges a code, fetches profile, persists the versioned
+  envelope, and proves the request contains no `client_secret`.
+- Base: concurrent expired-token callers share one refresh even when the refreshed access-token
+  string is unchanged.
+- Bad: applying `#[serde(rename_all = "camelCase")]` to the OAuth token response, accepting the
+  raw/full pair without comparing it to the requested ID, or parsing a 32 MiB attachment through
+  the normal 2 MiB metadata limit.
+
+### 6. Tests Required
+
+- OAuth localhost test: token form fields, PKCE verifier, redirect URI, profile request, normalized
+  account address, backend-only credential persistence, and no client secret.
+- Credential tests: rotation, omission retention, write failure, malformed fields, invalid grant,
+  missing credential, and same-token concurrent single-flight.
+- REST tests: response-size/Retry-After mapping, request-response message identity, empty History
+  IDs, attachment bounds, and all accepted/rejected/ambiguous send outcomes.
+- Run provider tests plus workspace format, strict Clippy, tests, binding drift, and changed-path
+  scans.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: Google token fields are snake_case, so this makes valid responses malformed.
+#[serde(rename_all = "camelCase")]
+struct TokenResponse { access_token: String }
+
+// Correct: use the wire names directly and validate before persistence.
+struct TokenResponse { access_token: String }
+```
