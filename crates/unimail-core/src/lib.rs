@@ -3,6 +3,7 @@
 mod domain;
 mod ids;
 mod mime;
+mod onboarding;
 mod provider;
 mod storage;
 
@@ -10,17 +11,18 @@ use serde::Serialize;
 use ts_rs::TS;
 
 pub use domain::{
-    Account, AccountAuthState, AccountCreateInput, AddressRole, Attachment, AttachmentInput,
-    ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
-    CredentialRef, DeleteAccountResult, DesiredReadMutation, DesiredReadMutationState, Draft,
-    DraftAddress, DraftAttachmentInput, DraftSaveInput, DraftSendReview, DraftSendReviewKey,
-    DraftSendReviewReason, DraftSummary, LeaseRecoveryResult, Mailbox, MailboxRole,
-    MailboxUpsertInput, MessageAddress, MessageAddressInput, MessageDetail, MessageDirection,
-    MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput, MessageSummary,
-    MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput, OfflineDraftReviewResult,
-    OperationLease, Provider, ReadIntentGeneration, SafeErrorCode, ScheduleSyncInput,
-    SendConfirmationRequired, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode,
-    SyncOperation, SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
+    Account, AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult,
+    AccountCreateInput, AddressRole, Attachment, AttachmentInput, ClaimDesiredReadMutationInput,
+    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, DeleteAccountResult,
+    DesiredReadMutation, DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput,
+    DraftSaveInput, DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary,
+    LeaseRecoveryResult, Mailbox, MailboxRole, MailboxUpsertInput, MessageAddress,
+    MessageAddressInput, MessageDetail, MessageDirection, MessageListInput, MessagePage,
+    MessagePageCursor, MessageReadStateInput, MessageSummary, MessageUpsertInput,
+    MessageUpsertResult, OfflineDraftReviewInput, OfflineDraftReviewResult, OperationLease,
+    Provider, ReadIntentGeneration, SafeErrorCode, ScheduleSyncInput, SendConfirmationRequired,
+    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation,
+    SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
     TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 pub use ids::{AccountId, AttachmentId, DraftId, LeaseId, MailboxId, MessageId, OperationId};
@@ -28,6 +30,10 @@ pub use mime::{
     AttachmentContent, ComposedMessage, DeliveryEnvelope, MimeAddress, MimeAddressEntry,
     MimeAddressRole, MimeAttachment, MimeBody, MimeCodec, MimeError, MimeErrorKind, MimeLimits,
     NormalizedMimeMessage, OutboundAttachment, OutboundMessage, ReplyHeaders,
+};
+pub use onboarding::{
+    ConnectedAccountSummary, GmailOnboardingCommandError, GmailOnboardingErrorCode,
+    GmailOnboardingState, GmailOnboardingStatus,
 };
 pub use provider::{
     AcceptedSend, AccountAuthenticator, AttachmentDownload, AttachmentRequest, AttachmentSink,

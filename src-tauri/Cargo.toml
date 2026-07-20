@@ -17,9 +17,18 @@ tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
+subtle = "2.6"
 tauri = { version = "2.11", features = [] }
+tokio = { version = "1.49", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unimail-core = { path = "../crates/unimail-core" }
+unimail-application = { path = "../crates/unimail-application" }
+unimail-providers = { path = "../crates/unimail-providers" }
 unimail-storage = { path = "../crates/unimail-storage" }
+url = "2.5"
+
+[dev-dependencies]
+secrecy = "0.10"
+serde_json = "1.0"
 
 [lints]
 workspace = true

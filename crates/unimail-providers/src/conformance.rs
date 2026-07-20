@@ -688,6 +688,7 @@ mod tests {
         let login = block_on(authenticator.start_login(
             StartLoginRequest {
                 provider: Provider::Qq,
+                redirect_uri: SensitiveString::new("http://127.0.0.1/callback"),
             },
             &cancellation,
         ))

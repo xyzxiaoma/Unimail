@@ -10,12 +10,12 @@ mod test_support;
 use std::{future::Future, pin::Pin};
 
 use unimail_core::{
-    AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, DesiredReadMutation, DraftSendReviewKey,
-    IncrementalSyncRequest, InitialSyncRequest, LeaseRecoveryResult, MailProvider,
-    OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, Provider, ProviderFuture,
-    ReadStateAck, RepositoryError, ScheduleSyncInput, SendConfirmationRequired, SetReadRequest,
-    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
+    Account, AccountAuthUpdateInput, AccountId, ClaimDesiredReadMutationInput,
+    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, DesiredReadMutation,
+    DraftSendReviewKey, IncrementalSyncRequest, InitialSyncRequest, LeaseRecoveryResult,
+    MailProvider, OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, Provider,
+    ProviderFuture, ReadStateAck, RepositoryError, ScheduleSyncInput, SendConfirmationRequired,
+    SetReadRequest, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
     SyncOperationSummary, SyncPage, TransitionDesiredReadMutationInput,
     TransitionSyncOperationInput,
 };
@@ -35,10 +35,13 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepositoryEr
 /// Runtime adapters must move synchronous database work off their async executor. The
 /// coordinator never holds a repository lock or transaction across an await point.
 pub trait SyncStore: Send + Sync {
+    fn update_account_auth(&self, input: AccountAuthUpdateInput) -> StoreFuture<'_, Account>;
+
     fn schedule_sync_operation(&self, input: ScheduleSyncInput) -> StoreFuture<'_, SyncOperation>;
 
     fn list_runnable_sync_operations(
         &self,
+        provider: Provider,
         now_ms: i64,
         limit: u32,
     ) -> StoreFuture<'_, Vec<SyncOperationSummary>>;

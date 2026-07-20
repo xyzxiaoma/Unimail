@@ -463,9 +463,19 @@ impl std::error::Error for ProviderError {}
 
 pub type ProviderResult<T> = Result<T, ProviderError>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct StartLoginRequest {
     pub provider: Provider,
+    pub redirect_uri: SensitiveString,
+}
+
+impl fmt::Debug for StartLoginRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StartLoginRequest")
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]

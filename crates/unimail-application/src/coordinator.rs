@@ -9,12 +9,13 @@ use std::{
 };
 
 use unimail_core::{
-    AccountId, Cancellation, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, DesiredReadMutationState, IncrementalSyncRequest,
-    InitialSyncRequest, LeaseId, OperationId, OperationLease, PageContinuation, ProviderError,
-    ReadStateAck, RepositoryError, SafeErrorCode, ScheduleSyncInput, SetReadRequest,
-    SyncBatchInput, SyncCursorKey, SyncMode, SyncOperation, SyncPageState, SyncStage, SyncState,
-    SyncTrigger, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+    AccountAuthState, AccountAuthUpdateInput, AccountId, Cancellation,
+    ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
+    DesiredReadMutationState, IncrementalSyncRequest, InitialSyncRequest, LeaseId, OperationId,
+    OperationLease, PageContinuation, ProviderError, ReadStateAck, RepositoryError, SafeErrorCode,
+    ScheduleSyncInput, SetReadRequest, SyncBatchInput, SyncCursorKey, SyncMode, SyncOperation,
+    SyncPageState, SyncStage, SyncState, SyncTrigger, TransitionDesiredReadMutationInput,
+    TransitionSyncOperationInput,
 };
 
 use crate::{
@@ -223,9 +224,10 @@ impl SyncCoordinator {
             return Ok(RunOutcome::CapacityLimited);
         };
         let now_ms = self.observed_now_ms();
+        let provider = self.provider.provider();
         let Some(summary) = self
             .store
-            .list_runnable_sync_operations(now_ms, 1)
+            .list_runnable_sync_operations(provider, now_ms, 1)
             .await?
             .into_iter()
             .next()
@@ -240,6 +242,7 @@ impl SyncCoordinator {
             .store
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id: summary.operation_id,
+                provider,
                 lease,
                 claimed_at_ms: now_ms,
             })
@@ -547,6 +550,14 @@ impl SyncCoordinator {
                             &error,
                         )
                         .await?;
+                        self.store
+                            .update_account_auth(AccountAuthUpdateInput {
+                                account_id: mutation.key.account_id,
+                                auth_state: AccountAuthState::NeedsAuthentication,
+                                safe_error_code: safe_code(&error),
+                                updated_at_ms: failed_at_ms,
+                            })
+                            .await?;
                         Ok(RunOutcome::NeedsAuth)
                     }
                     RetryAction::Stop(RetryStop::Cancelled) => {
@@ -607,6 +618,14 @@ impl SyncCoordinator {
                     failed_at_ms,
                 )
                 .await?;
+                self.store
+                    .update_account_auth(AccountAuthUpdateInput {
+                        account_id: operation.account_id,
+                        auth_state: AccountAuthState::NeedsAuthentication,
+                        safe_error_code: safe_code(error),
+                        updated_at_ms: failed_at_ms,
+                    })
+                    .await?;
                 Ok(RunOutcome::NeedsAuth)
             }
             RetryAction::Stop(RetryStop::Cancelled) => {
@@ -966,6 +985,30 @@ mod tests {
     }
 
     #[test]
+    fn gmail_coordinator_does_not_claim_another_provider_operation() {
+        let provider = Arc::new(FakeProvider::new([]));
+        let store = FakeStore {
+            provider: Provider::Outlook,
+            ..FakeStore::default()
+        };
+        let coordinator = coordinator(provider.clone(), store);
+        block_on(coordinator.trigger(
+            AccountId::new(),
+            "inbox".to_owned(),
+            SyncTrigger::Manual,
+            SyncMode::Initial(InitialSyncLimit::new(500).expect("valid limit")),
+        ))
+        .expect("schedule other-provider operation");
+
+        assert_eq!(
+            block_on(coordinator.run_next(&TestCancellation::new(false)))
+                .expect("provider-filtered scheduler"),
+            RunOutcome::Idle
+        );
+        assert_eq!(provider.sync_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn triggers_coalesce_and_transient_pages_commit_once_at_checkpoint() {
         let provider = Arc::new(FakeProvider::new([
             Ok(SyncPage {
@@ -1103,6 +1146,51 @@ mod tests {
                 .commits
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn authentication_failure_updates_account_metadata_after_sync_transition() {
+        let provider = Arc::new(FakeProvider::new([Err(ProviderError::new(
+            ProviderErrorKind::Authentication,
+            "gmail_authentication_required",
+        ))]));
+        let store = FakeStore::default();
+        let account_id = AccountId::new();
+        let coordinator = coordinator_with(
+            provider,
+            store.clone(),
+            Arc::new(FixedClock::new(10_000)),
+            Arc::new(BoundedSyncPermitPool::new(4, 2).expect("valid permit limits")),
+        );
+        block_on(coordinator.trigger(
+            account_id,
+            "inbox".to_owned(),
+            SyncTrigger::Startup,
+            SyncMode::Initial(InitialSyncLimit::new(500).expect("valid limit")),
+        ))
+        .expect("schedule sync");
+
+        assert_eq!(
+            block_on(coordinator.run_next(&TestCancellation::new(false)))
+                .expect("authentication failure is durable"),
+            RunOutcome::NeedsAuth
+        );
+        let state = store.state.lock().expect("fake store lock");
+        assert_eq!(state.auth_updates.len(), 1);
+        let update = &state.auth_updates[0];
+        assert_eq!(update.account_id, account_id);
+        assert_eq!(
+            update.auth_state,
+            unimail_core::AccountAuthState::NeedsAuthentication
+        );
+        assert_eq!(
+            update
+                .safe_error_code
+                .as_ref()
+                .map(unimail_core::SafeErrorCode::as_str),
+            Some("gmail_authentication_required")
+        );
+        assert_eq!(update.updated_at_ms, 10_000);
     }
 
     #[test]

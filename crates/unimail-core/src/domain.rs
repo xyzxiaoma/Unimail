@@ -3,6 +3,7 @@
 use std::{fmt, ops::BitOr};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::{
     AccountId, AttachmentId, DraftId, DurableCheckpoint, InitialSyncLimit, LeaseId, MailboxId,
@@ -10,8 +11,9 @@ use crate::{
 };
 
 /// Supported provider families without provider-specific API details.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum Provider {
     Gmail,
     Outlook,
@@ -49,8 +51,9 @@ pub enum MessageDirection {
 }
 
 /// Authentication state persisted without provider credentials.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum AccountAuthState {
     Connected,
     NeedsAuthentication,
@@ -58,7 +61,7 @@ pub enum AccountAuthState {
 }
 
 /// Opaque identifier for a secret held outside the mail database.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CredentialRef(String);
 
@@ -76,8 +79,67 @@ impl CredentialRef {
     }
 }
 
-/// Input used to create an account and its safe local metadata.
+impl fmt::Debug for CredentialRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CredentialRef([redacted])")
+    }
+}
+
+/// Atomically creates or reconnects one provider account with a new credential reference.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountConnectInput {
+    pub id: AccountId,
+    pub provider: Provider,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub credential_ref: CredentialRef,
+    pub connected_at_ms: i64,
+}
+
+impl fmt::Debug for AccountConnectInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountConnectInput")
+            .field("id", &self.id)
+            .field("provider", &self.provider)
+            .field("has_display_name", &self.display_name.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Result of account connection, including a superseded credential reference for cleanup.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountConnectResult {
+    pub account: Account,
+    pub replaced_credential_ref: Option<CredentialRef>,
+    pub created: bool,
+}
+
+impl fmt::Debug for AccountConnectResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountConnectResult")
+            .field("account", &self.account)
+            .field(
+                "replaced_credential",
+                &self.replaced_credential_ref.is_some(),
+            )
+            .field("created", &self.created)
+            .finish()
+    }
+}
+
+/// Safe account authentication-state transition without credential values.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountAuthUpdateInput {
+    pub account_id: AccountId,
+    pub auth_state: AccountAuthState,
+    pub safe_error_code: Option<SafeErrorCode>,
+    pub updated_at_ms: i64,
+}
+
+/// Input used to create an account and its safe local metadata.
+#[derive(Clone, PartialEq, Eq)]
 pub struct AccountCreateInput {
     pub id: AccountId,
     pub provider: Provider,
@@ -89,8 +151,21 @@ pub struct AccountCreateInput {
     pub created_at_ms: i64,
 }
 
+impl fmt::Debug for AccountCreateInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountCreateInput")
+            .field("id", &self.id)
+            .field("provider", &self.provider)
+            .field("has_display_name", &self.display_name.is_some())
+            .field("auth_state", &self.auth_state)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Provider-neutral account record. It never contains credential values.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Account {
     pub id: AccountId,
     pub provider: Provider,
@@ -103,6 +178,19 @@ pub struct Account {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub last_error_code: Option<String>,
+}
+
+impl fmt::Debug for Account {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Account")
+            .field("id", &self.id)
+            .field("provider", &self.provider)
+            .field("auth_state", &self.auth_state)
+            .field("enabled", &self.enabled)
+            .field("deleting", &self.deleting)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Input used to insert or update a provider mailbox.
@@ -529,6 +617,7 @@ impl SafeErrorCode {
         "fake_remote_item_not_found",
         "fake_state_unavailable",
         "fictional_throttle",
+        "gmail_authentication_required",
         "invalid_cursor_json",
         "invalid_initial_sync_limit",
         "operation_cancelled",
@@ -620,6 +709,7 @@ pub struct ScheduleSyncInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaimSyncOperationInput {
     pub operation_id: OperationId,
+    pub provider: Provider,
     pub lease: OperationLease,
     pub claimed_at_ms: i64,
 }
@@ -802,13 +892,14 @@ pub struct DeleteAccountResult {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AccountId, DraftId, DurableCheckpoint, LeaseId, OpaqueProviderCursor, OperationId,
+        AccountId, CredentialRef, DraftId, DurableCheckpoint, LeaseId, OpaqueProviderCursor,
+        OperationId,
     };
 
     use super::{
-        AddressRole, DraftSaveInput, MailboxRole, MessageDirection, OfflineDraftReviewInput,
-        Provider, ReadIntentGeneration, SafeErrorCode, SyncBatchInput, SyncCursor, SyncCursorKey,
-        SyncTrigger, SyncTriggerSet,
+        Account, AccountAuthState, AccountConnectInput, AddressRole, DraftSaveInput, MailboxRole,
+        MessageDirection, OfflineDraftReviewInput, Provider, ReadIntentGeneration, SafeErrorCode,
+        SyncBatchInput, SyncCursor, SyncCursorKey, SyncTrigger, SyncTriggerSet,
     };
 
     #[test]
@@ -872,6 +963,41 @@ mod tests {
         assert!(SafeErrorCode::new("raw provider response: token=private").is_none());
         assert!(SafeErrorCode::new("UPPERCASE").is_none());
         assert!(SafeErrorCode::new("secrettoken123").is_none());
+    }
+
+    #[test]
+    fn account_debug_omits_address_display_name_and_credential_reference() {
+        let account_id = AccountId::new();
+        let account = Account {
+            id: account_id,
+            provider: Provider::Gmail,
+            email: "private@example.com".to_owned(),
+            display_name: Some("Private User".to_owned()),
+            credential_ref: CredentialRef::new("private-credential-reference"),
+            auth_state: AccountAuthState::Connected,
+            enabled: true,
+            deleting: false,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            last_error_code: None,
+        };
+        let connect = AccountConnectInput {
+            id: account_id,
+            provider: Provider::Gmail,
+            email: account.email.clone(),
+            display_name: account.display_name.clone(),
+            credential_ref: account.credential_ref.clone(),
+            connected_at_ms: 1,
+        };
+        let debug = format!("{account:?} {connect:?} {:?}", account.credential_ref);
+
+        for private in [
+            "private@example.com",
+            "Private User",
+            "private-credential-reference",
+        ] {
+            assert!(!debug.contains(private));
+        }
     }
 
     #[test]

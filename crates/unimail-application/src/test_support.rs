@@ -6,12 +6,13 @@ use std::{
 };
 
 use unimail_core::{
-    AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, DesiredReadMutation, DraftSendReviewKey, LeaseRecoveryResult,
-    OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, RepositoryError,
-    ScheduleSyncInput, SendConfirmationRequired, SyncBatchInput, SyncBatchResult, SyncCursor,
-    SyncCursorKey, SyncOperation, SyncOperationSummary, SyncState, SyncTriggerSet,
-    TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+    Account, AccountAuthUpdateInput, AccountId, ClaimDesiredReadMutationInput,
+    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, DesiredReadMutation,
+    DraftSendReviewKey, LeaseRecoveryResult, OfflineDraftReviewInput, OfflineDraftReviewResult,
+    OperationId, Provider, RepositoryError, ScheduleSyncInput, SendConfirmationRequired,
+    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
+    SyncOperationSummary, SyncState, SyncTriggerSet, TransitionDesiredReadMutationInput,
+    TransitionSyncOperationInput,
 };
 
 use crate::{StoreFuture, SyncStore};
@@ -29,14 +30,48 @@ pub struct StoreState {
     pub offline_result: Option<OfflineDraftReviewResult>,
     pub confirmations: Vec<SendConfirmationRequired>,
     pub consumed_reviews: Vec<DraftSendReviewKey>,
+    pub auth_updates: Vec<AccountAuthUpdateInput>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FakeStore {
     pub state: Arc<Mutex<StoreState>>,
+    pub provider: Provider,
+}
+
+impl Default for FakeStore {
+    fn default() -> Self {
+        Self {
+            state: Arc::default(),
+            provider: Provider::Gmail,
+        }
+    }
 }
 
 impl SyncStore for FakeStore {
+    fn update_account_auth(&self, input: AccountAuthUpdateInput) -> StoreFuture<'_, Account> {
+        self.state
+            .lock()
+            .expect("fake store lock")
+            .auth_updates
+            .push(input.clone());
+        Box::pin(async move {
+            Ok(Account {
+                id: input.account_id,
+                provider: Provider::Gmail,
+                email: "owner@example.test".to_owned(),
+                display_name: None,
+                credential_ref: CredentialRef::new("fake-credential"),
+                auth_state: input.auth_state,
+                enabled: true,
+                deleting: false,
+                created_at_ms: input.updated_at_ms,
+                updated_at_ms: input.updated_at_ms,
+                last_error_code: input.safe_error_code.map(|code| code.as_str().to_owned()),
+            })
+        })
+    }
+
     fn schedule_sync_operation(&self, input: ScheduleSyncInput) -> StoreFuture<'_, SyncOperation> {
         let mut state = self.state.lock().expect("fake store lock");
         let coalesces = state.operation.as_ref().is_some_and(|operation| {
@@ -90,9 +125,13 @@ impl SyncStore for FakeStore {
 
     fn list_runnable_sync_operations(
         &self,
+        provider: Provider,
         now_ms: i64,
         _limit: u32,
     ) -> StoreFuture<'_, Vec<SyncOperationSummary>> {
+        if provider != self.provider {
+            return Box::pin(async { Ok(Vec::new()) });
+        }
         let summaries = self
             .state
             .lock()
@@ -117,6 +156,9 @@ impl SyncStore for FakeStore {
         &self,
         input: ClaimSyncOperationInput,
     ) -> StoreFuture<'_, Option<SyncOperation>> {
+        if input.provider != self.provider {
+            return Box::pin(async { Ok(None) });
+        }
         let mut state = self.state.lock().expect("fake store lock");
         let claimed_triggers = state.pending_triggers;
         let claimed = state

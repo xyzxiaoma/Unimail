@@ -6,12 +6,13 @@ use thiserror::Error;
 use ts_rs::TS;
 
 use crate::{
-    Account, AccountCreateInput, AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    Account, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult, AccountCreateInput,
+    AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
     CompleteDesiredReadMutationInput, DeleteAccountResult, DesiredReadMutation, Draft, DraftId,
     DraftSaveInput, DraftSendReviewKey, DraftSummary, LeaseRecoveryResult, Mailbox,
     MailboxUpsertInput, MessageDetail, MessageId, MessageListInput, MessagePage,
     MessageReadStateInput, MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput,
-    OfflineDraftReviewResult, OperationId, ScheduleSyncInput, SendConfirmationRequired,
+    OfflineDraftReviewResult, OperationId, Provider, ScheduleSyncInput, SendConfirmationRequired,
     SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
     SyncOperationSummary, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
@@ -261,6 +262,21 @@ pub trait StorageRepository: Send + Sync {
     /// Returns a repository category when validation or persistence fails.
     fn create_account(&self, input: AccountCreateInput) -> RepositoryResult<Account>;
 
+    /// Atomically creates or reconnects an account by provider and normalized email.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when validation or persistence fails.
+    fn connect_account(&self, input: AccountConnectInput)
+    -> RepositoryResult<AccountConnectResult>;
+
+    /// Updates one account authentication state without changing its credential value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the account cannot be updated.
+    fn update_account_auth(&self, input: AccountAuthUpdateInput) -> RepositoryResult<Account>;
+
     /// Lists all visible, non-deleted accounts.
     ///
     /// # Errors
@@ -439,6 +455,7 @@ pub trait StorageRepository: Send + Sync {
     /// Returns a repository category when storage cannot be queried.
     fn list_runnable_sync_operations(
         &self,
+        provider: Provider,
         now_ms: i64,
         limit: u32,
     ) -> RepositoryResult<Vec<SyncOperationSummary>>;

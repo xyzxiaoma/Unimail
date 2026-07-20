@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { getConnectedAccounts, getGmailOnboardingStatus } from "./lib/ipc/gmail-onboarding";
 import { decodeStorageCommandError, getStorageStatus } from "./lib/ipc/storage-status";
 
 vi.mock("./lib/ipc/application-info", () => ({
@@ -12,8 +13,20 @@ vi.mock("./lib/ipc/storage-status", () => ({
   getStorageStatus: vi.fn(),
 }));
 
+vi.mock("./lib/ipc/gmail-onboarding", () => ({
+  cancelGmailOnboarding: vi.fn(),
+  decodeGmailOnboardingCommandError: vi.fn(() => {
+    throw new TypeError("invalid test rejection");
+  }),
+  getConnectedAccounts: vi.fn(),
+  getGmailOnboardingStatus: vi.fn(),
+  startGmailOnboarding: vi.fn(),
+}));
+
 const mockedDecodeStorageCommandError = vi.mocked(decodeStorageCommandError);
 const mockedGetStorageStatus = vi.mocked(getStorageStatus);
+const mockedGetConnectedAccounts = vi.mocked(getConnectedAccounts);
+const mockedGetGmailOnboardingStatus = vi.mocked(getGmailOnboardingStatus);
 
 describe("Unimail 基础界面", () => {
   beforeEach(() => {
@@ -24,6 +37,19 @@ describe("Unimail 基础界面", () => {
     mockedDecodeStorageCommandError.mockImplementation(() => {
       throw new TypeError("invalid test rejection");
     });
+    mockedGetConnectedAccounts.mockReset();
+    mockedGetConnectedAccounts.mockResolvedValue([]);
+    mockedGetGmailOnboardingStatus.mockReset();
+    mockedGetGmailOnboardingStatus.mockResolvedValue({
+      state: "idle",
+      flowId: null,
+      account: null,
+      error: null,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("展示中文三栏空状态和桌面状态占位", () => {
@@ -53,6 +79,55 @@ describe("Unimail 基础界面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "同步邮件" }));
     expect(screen.getByText("尚无可同步账户")).toBeTruthy();
+  });
+
+  it("授权失效的 Gmail 账户保留重新连接入口", async () => {
+    mockedGetConnectedAccounts.mockResolvedValue([
+      {
+        id: "gmail-needs-auth",
+        provider: "gmail",
+        email: "owner@example.com",
+        displayName: null,
+        authState: "needs_authentication",
+      },
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByText("Gmail 账户需要重新连接")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新连接 Gmail" })).toBeTruthy();
+  });
+
+  it("两个添加账户入口都打开 Gmail 对话框", async () => {
+    const { unmount } = render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
+    expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
+    unmount();
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "添加邮箱账户" }));
+    expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
+  });
+
+  it("Gmail 对话框响应 Escape 并把焦点还给入口", async () => {
+    render(<App />);
+    const opener = screen.getByRole("button", { name: "开始设置" });
+    fireEvent.click(opener);
+    expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "连接 Gmail" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it("Gmail 对话框打开时不会响应写邮件快捷键", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
+    expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "n" });
+    expect(screen.queryByRole("dialog", { name: "撰写邮件" })).toBeNull();
   });
 
   it("展示经过解码的加密存储就绪状态", async () => {

@@ -7,22 +7,22 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use unimail_core::{
-    Account, AccountAuthState, AccountCreateInput, AccountId, AddressRole, Attachment,
-    AttachmentId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, CredentialRef, CredentialStore, DeleteAccountResult,
-    DesiredReadMutation, DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput,
-    DraftId, DraftSaveInput, DraftSendReview, DraftSendReviewKey, DraftSendReviewReason,
-    DraftSummary, DurableCheckpoint, InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId,
-    MailboxRole, MailboxUpsertInput, MessageAddress, MessageAddressInput, MessageDetail,
-    MessageDirection, MessageId, MessageListInput, MessagePage, MessagePageCursor,
-    MessageReadStateInput, MessageSummary, MessageUpsertInput, MessageUpsertResult,
-    MimeAddressRole, OfflineDraftReviewInput, OfflineDraftReviewResult, OpaqueProviderCursor,
-    OperationId, OperationLease, Provider, ProviderRevision, ReadIntentGeneration, RemoteChange,
-    RemoteMailbox, RemoteMessage, RemoteMessageKey, RepositoryError, RepositoryResult,
-    SafeErrorCode, ScheduleSyncInput, SendConfirmationRequired, StorageRepository, StorageStatus,
-    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation,
-    SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
-    TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+    Account, AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult,
+    AccountCreateInput, AccountId, AddressRole, Attachment, AttachmentId,
+    ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
+    CredentialRef, CredentialStore, DeleteAccountResult, DesiredReadMutation,
+    DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput, DraftId, DraftSaveInput,
+    DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary, DurableCheckpoint,
+    InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId, MailboxRole, MailboxUpsertInput,
+    MessageAddress, MessageAddressInput, MessageDetail, MessageDirection, MessageId,
+    MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput, MessageSummary,
+    MessageUpsertInput, MessageUpsertResult, MimeAddressRole, OfflineDraftReviewInput,
+    OfflineDraftReviewResult, OpaqueProviderCursor, OperationId, OperationLease, Provider,
+    ProviderRevision, ReadIntentGeneration, RemoteChange, RemoteMailbox, RemoteMessage,
+    RemoteMessageKey, RepositoryError, RepositoryResult, SafeErrorCode, ScheduleSyncInput,
+    SendConfirmationRequired, StorageRepository, StorageStatus, SyncBatchInput, SyncBatchResult,
+    SyncCursor, SyncCursorKey, SyncMode, SyncOperation, SyncOperationSummary, SyncStage, SyncState,
+    SyncTrigger, SyncTriggerSet, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
 use crate::{ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError};
@@ -278,6 +278,26 @@ impl StorageRepository for SqlCipherRepository {
             })
             .map_err(map_storage_error)?;
         Ok(account)
+    }
+
+    fn connect_account(
+        &self,
+        input: AccountConnectInput,
+    ) -> RepositoryResult<AccountConnectResult> {
+        if input.email.trim().is_empty()
+            || input.credential_ref.as_str() == crate::credentials::DATABASE_KEY_REF
+        {
+            return Err(RepositoryError::ConstraintViolation);
+        }
+        self.store
+            .with_transaction(|transaction| connect_account(transaction, input))
+            .map_err(map_storage_error)
+    }
+
+    fn update_account_auth(&self, input: AccountAuthUpdateInput) -> RepositoryResult<Account> {
+        self.store
+            .with_transaction(|transaction| update_account_auth(transaction, input))
+            .map_err(map_storage_error)
     }
 
     fn list_accounts(&self) -> RepositoryResult<Vec<Account>> {
@@ -587,11 +607,14 @@ impl StorageRepository for SqlCipherRepository {
 
     fn list_runnable_sync_operations(
         &self,
+        provider: Provider,
         now_ms: i64,
         limit: u32,
     ) -> RepositoryResult<Vec<SyncOperationSummary>> {
         self.store
-            .with_connection(|connection| list_runnable_sync_operations(connection, now_ms, limit))
+            .with_connection(|connection| {
+                list_runnable_sync_operations(connection, provider, now_ms, limit)
+            })
             .map_err(map_storage_error)
     }
 
@@ -771,6 +794,143 @@ fn account_from_row(row: AccountRow) -> Result<Account, StorageError> {
         created_at_ms: row.8,
         updated_at_ms: row.9,
         last_error_code: row.10,
+    })
+}
+
+fn connect_account(
+    transaction: &rusqlite::Transaction<'_>,
+    input: AccountConnectInput,
+) -> Result<AccountConnectResult, StorageError> {
+    let existing = transaction
+        .query_row(
+            "SELECT id, provider, email, display_name, credential_ref, auth_state,
+                    enabled, deleting, created_at_ms, updated_at_ms, last_error_code
+             FROM accounts WHERE provider=?1 AND email=?2 AND deleting=0",
+            params![provider_to_str(input.provider), &input.email],
+            read_account_row,
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?
+        .map(account_from_row)
+        .transpose()?;
+
+    if let Some(existing) = existing {
+        let updated_at_ms = input
+            .connected_at_ms
+            .max(existing.created_at_ms)
+            .max(existing.updated_at_ms);
+        transaction
+            .execute(
+                "UPDATE accounts
+                 SET display_name=?2, credential_ref=?3, auth_state='connected', enabled=1,
+                     last_error_code=NULL, updated_at_ms=?4
+                 WHERE id=?1 AND deleting=0",
+                params![
+                    existing.id.to_string(),
+                    input.display_name.as_deref(),
+                    input.credential_ref.as_str(),
+                    updated_at_ms,
+                ],
+            )
+            .map_err(|error| StorageError::from_sql(&error))?;
+        let replaced_credential_ref =
+            (existing.credential_ref != input.credential_ref).then_some(existing.credential_ref);
+        return Ok(AccountConnectResult {
+            account: Account {
+                id: existing.id,
+                provider: existing.provider,
+                email: existing.email,
+                display_name: input.display_name,
+                credential_ref: input.credential_ref,
+                auth_state: AccountAuthState::Connected,
+                enabled: true,
+                deleting: false,
+                created_at_ms: existing.created_at_ms,
+                updated_at_ms,
+                last_error_code: None,
+            },
+            replaced_credential_ref,
+            created: false,
+        });
+    }
+
+    let account = Account {
+        id: input.id,
+        provider: input.provider,
+        email: input.email,
+        display_name: input.display_name,
+        credential_ref: input.credential_ref,
+        auth_state: AccountAuthState::Connected,
+        enabled: true,
+        deleting: false,
+        created_at_ms: input.connected_at_ms.max(0),
+        updated_at_ms: input.connected_at_ms.max(0),
+        last_error_code: None,
+    };
+    transaction
+        .execute(
+            "INSERT INTO accounts(
+                id, provider, email, display_name, credential_ref, auth_state,
+                enabled, deleting, cleanup_state, created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'connected', 1, 0, 'none', ?6, ?6)",
+            params![
+                account.id.to_string(),
+                provider_to_str(account.provider),
+                &account.email,
+                account.display_name.as_deref(),
+                account.credential_ref.as_str(),
+                account.created_at_ms,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    Ok(AccountConnectResult {
+        account,
+        replaced_credential_ref: None,
+        created: true,
+    })
+}
+
+fn update_account_auth(
+    transaction: &rusqlite::Transaction<'_>,
+    input: AccountAuthUpdateInput,
+) -> Result<Account, StorageError> {
+    let existing = transaction
+        .query_row(
+            "SELECT id, provider, email, display_name, credential_ref, auth_state,
+                    enabled, deleting, created_at_ms, updated_at_ms, last_error_code
+             FROM accounts WHERE id=?1 AND deleting=0",
+            [input.account_id.to_string()],
+            read_account_row,
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?
+        .map(account_from_row)
+        .transpose()?
+        .ok_or(StorageError::NotFound)?;
+    let updated_at_ms = input
+        .updated_at_ms
+        .max(existing.created_at_ms)
+        .max(existing.updated_at_ms);
+    transaction
+        .execute(
+            "UPDATE accounts SET auth_state=?2, last_error_code=?3, updated_at_ms=?4
+             WHERE id=?1 AND deleting=0",
+            params![
+                input.account_id.to_string(),
+                auth_state_to_str(input.auth_state),
+                input
+                    .safe_error_code
+                    .as_ref()
+                    .map(unimail_core::SafeErrorCode::as_str),
+                updated_at_ms,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    Ok(Account {
+        auth_state: input.auth_state,
+        last_error_code: input.safe_error_code.map(|code| code.as_str().to_owned()),
+        updated_at_ms,
+        ..existing
     })
 }
 
@@ -2128,10 +2288,14 @@ fn load_sync_operation(
 ) -> Result<Option<SyncOperation>, StorageError> {
     connection
         .query_row(
-            "SELECT id, account_id, scope, trigger_bits, mode, mode_limit, stage, state,
-                    attempt_count, next_attempt_at_ms, lease_id, lease_expires_at_ms,
-                    cancel_generation, safe_error_code, created_at_ms, updated_at_ms,
-                    started_at_ms, finished_at_ms
+            "SELECT sync_operations.id, sync_operations.account_id, sync_operations.scope,
+                    sync_operations.trigger_bits, sync_operations.mode,
+                    sync_operations.mode_limit, sync_operations.stage, sync_operations.state,
+                    sync_operations.attempt_count, sync_operations.next_attempt_at_ms,
+                    sync_operations.lease_id, sync_operations.lease_expires_at_ms,
+                    sync_operations.cancel_generation, sync_operations.safe_error_code,
+                    sync_operations.created_at_ms, sync_operations.updated_at_ms,
+                    sync_operations.started_at_ms, sync_operations.finished_at_ms
              FROM sync_operations WHERE id=?1",
             [operation_id.to_string()],
             sync_operation_from_row,
@@ -2205,27 +2369,42 @@ fn sync_summary(operation: SyncOperation) -> SyncOperationSummary {
 
 fn list_runnable_sync_operations(
     connection: &Connection,
+    provider: Provider,
     now_ms: i64,
     limit: u32,
 ) -> Result<Vec<SyncOperationSummary>, StorageError> {
     let mut statement = connection
         .prepare(
-            "SELECT id, account_id, scope, trigger_bits, mode, mode_limit, stage, state,
-                    attempt_count, next_attempt_at_ms, lease_id, lease_expires_at_ms,
-                    cancel_generation, safe_error_code, created_at_ms, updated_at_ms,
-                    started_at_ms, finished_at_ms
-             FROM sync_operations
-             WHERE state IN ('scheduled', 'waiting_backoff')
-               AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms<=?1 OR ?1<updated_at_ms)
-               AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms<=?1 OR ?1<updated_at_ms)
-             ORDER BY coalesce(next_attempt_at_ms, scheduled_at_ms), scheduled_at_ms, id
-             LIMIT ?2",
+            "SELECT operations.id, operations.account_id, operations.scope,
+                    operations.trigger_bits, operations.mode, operations.mode_limit,
+                    operations.stage, operations.state, operations.attempt_count,
+                    operations.next_attempt_at_ms, operations.lease_id,
+                    operations.lease_expires_at_ms, operations.cancel_generation,
+                    operations.safe_error_code, operations.created_at_ms,
+                    operations.updated_at_ms, operations.started_at_ms,
+                    operations.finished_at_ms
+             FROM sync_operations AS operations
+             INNER JOIN accounts AS account ON account.id=operations.account_id
+             WHERE operations.state IN ('scheduled', 'waiting_backoff')
+               AND account.provider=?1 AND account.deleting=0 AND account.enabled=1
+               AND (operations.next_attempt_at_ms IS NULL
+                    OR operations.next_attempt_at_ms<=?2 OR ?2<operations.updated_at_ms)
+               AND (operations.lease_expires_at_ms IS NULL
+                    OR operations.lease_expires_at_ms<=?2 OR ?2<operations.updated_at_ms)
+             ORDER BY coalesce(operations.next_attempt_at_ms, operations.scheduled_at_ms),
+                      operations.scheduled_at_ms, operations.id
+             LIMIT ?3",
         )
         .map_err(|error| StorageError::from_sql(&error))?;
     statement
-        .query_map(params![now_ms, i64::from(limit.clamp(1, 100))], |row| {
-            sync_operation_from_row(row).map(sync_summary)
-        })
+        .query_map(
+            params![
+                provider_to_str(provider),
+                now_ms,
+                i64::from(limit.clamp(1, 100))
+            ],
+            |row| sync_operation_from_row(row).map(sync_summary),
+        )
         .map_err(|error| StorageError::from_sql(&error))?
         .map(|row| row.map_err(|error| StorageError::from_sql(&error)))
         .collect()
@@ -2247,6 +2426,19 @@ fn claim_sync_operation(
     connection: &Connection,
     input: ClaimSyncOperationInput,
 ) -> Result<Option<SyncOperation>, StorageError> {
+    let account_provider: Option<String> = connection
+        .query_row(
+            "SELECT provider FROM accounts WHERE id=(
+                SELECT account_id FROM sync_operations WHERE id=?1
+             ) AND deleting=0 AND enabled=1",
+            [input.operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?;
+    if account_provider.as_deref() != Some(provider_to_str(input.provider)) {
+        return Ok(None);
+    }
     let Some(mut operation) = load_sync_operation(connection, input.operation_id)? else {
         return Ok(None);
     };
@@ -3194,6 +3386,7 @@ fn map_storage_error(error: StorageError) -> RepositoryError {
         StorageError::LockPoisoned => RepositoryError::StorageBusy,
         StorageError::Constraint => RepositoryError::ConstraintViolation,
         StorageError::DraftRevisionConflict => RepositoryError::RevisionConflict,
+        StorageError::NotFound => RepositoryError::NotFound,
         StorageError::Serialization => RepositoryError::InvalidData,
     }
 }
@@ -3205,18 +3398,18 @@ mod tests {
     use secrecy::SecretBox;
     use tempfile::TempDir;
     use unimail_core::{
-        AccountAuthState, AccountCreateInput, AccountId, AddressRole, AttachmentId,
-        AttachmentInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-        CompleteDesiredReadMutationInput, CredentialRef, CredentialStore, DesiredReadMutationState,
-        DraftAddress, DraftId, DraftSaveInput, DraftSendReviewKey, DurableCheckpoint,
-        InitialSyncLimit, LeaseId, MailboxId, MailboxRole, MailboxUpsertInput, MessageAddressInput,
-        MessageDirection, MessageId, MessageListInput, MessageReadStateInput, MessageUpsertInput,
-        MimeAddress, MimeAddressEntry, MimeAddressRole, MimeBody, NormalizedMimeMessage,
-        OfflineDraftReviewInput, OpaqueProviderCursor, OperationId, OperationLease, Provider,
-        ProviderRevision, RemoteChange, RemoteMailbox, RemoteMailboxKey, RemoteMessage,
-        RemoteMessageKey, RepositoryError, ScheduleSyncInput, StorageRepository, SyncBatchInput,
-        SyncBatchResult, SyncCursorKey, SyncMode, SyncState, SyncTrigger,
-        TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+        AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountCreateInput,
+        AccountId, AddressRole, AttachmentId, AttachmentInput, ClaimDesiredReadMutationInput,
+        ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, CredentialStore,
+        DesiredReadMutationState, DraftAddress, DraftId, DraftSaveInput, DraftSendReviewKey,
+        DurableCheckpoint, InitialSyncLimit, LeaseId, MailboxId, MailboxRole, MailboxUpsertInput,
+        MessageAddressInput, MessageDirection, MessageId, MessageListInput, MessageReadStateInput,
+        MessageUpsertInput, MimeAddress, MimeAddressEntry, MimeAddressRole, MimeBody,
+        NormalizedMimeMessage, OfflineDraftReviewInput, OpaqueProviderCursor, OperationId,
+        OperationLease, Provider, ProviderRevision, RemoteChange, RemoteMailbox, RemoteMailboxKey,
+        RemoteMessage, RemoteMessageKey, RepositoryError, SafeErrorCode, ScheduleSyncInput,
+        StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursorKey, SyncMode, SyncState,
+        SyncTrigger, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
     };
 
     use super::SqlCipherRepository;
@@ -3279,6 +3472,137 @@ mod tests {
             account_id,
             mailbox_id,
         }
+    }
+
+    #[test]
+    fn account_connection_creates_or_reconnects_atomically_without_secret_columns() {
+        let fixture = fixture();
+        let email = format!("{}@example.test", fixture.account_id);
+        let replacement = CredentialRef::new("gmail-reconnected-credential");
+        let result = fixture
+            .repository
+            .connect_account(AccountConnectInput {
+                id: AccountId::new(),
+                provider: Provider::Gmail,
+                email: email.clone(),
+                display_name: Some("重新连接".to_owned()),
+                credential_ref: replacement.clone(),
+                connected_at_ms: 20,
+            })
+            .expect("reconnect existing account");
+
+        assert!(!result.created);
+        assert_eq!(result.account.id, fixture.account_id);
+        assert_eq!(result.account.credential_ref, replacement);
+        assert_eq!(result.account.display_name.as_deref(), Some("重新连接"));
+        assert!(result.replaced_credential_ref.is_some());
+
+        let error_code = SafeErrorCode::new("gmail_authentication_required")
+            .expect("allowlisted Gmail authentication code");
+        let updated = fixture
+            .repository
+            .update_account_auth(AccountAuthUpdateInput {
+                account_id: fixture.account_id,
+                auth_state: AccountAuthState::NeedsAuthentication,
+                safe_error_code: Some(error_code),
+                updated_at_ms: 21,
+            })
+            .expect("update authentication state");
+        assert_eq!(updated.auth_state, AccountAuthState::NeedsAuthentication);
+        assert_eq!(
+            updated.last_error_code.as_deref(),
+            Some("gmail_authentication_required")
+        );
+
+        assert_eq!(
+            fixture
+                .repository
+                .list_accounts()
+                .expect("list connected account")
+                .iter()
+                .filter(|account| account.provider == Provider::Gmail && account.email == email)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn runnable_and_claim_paths_enforce_the_account_provider() {
+        let fixture = fixture();
+        let outlook_id = AccountId::new();
+        fixture
+            .repository
+            .create_account(AccountCreateInput {
+                id: outlook_id,
+                provider: Provider::Outlook,
+                email: "outlook@example.test".to_owned(),
+                display_name: None,
+                credential_ref: CredentialRef::new("outlook-credential"),
+                auth_state: AccountAuthState::Connected,
+                enabled: true,
+                created_at_ms: 2,
+            })
+            .expect("create Outlook account");
+        let gmail_operation = OperationId::new();
+        let outlook_operation = OperationId::new();
+        for (operation_id, account_id) in [
+            (gmail_operation, fixture.account_id),
+            (outlook_operation, outlook_id),
+        ] {
+            fixture
+                .repository
+                .schedule_sync_operation(ScheduleSyncInput {
+                    operation_id,
+                    account_id,
+                    scope: "inbox".to_owned(),
+                    trigger: SyncTrigger::Manual,
+                    mode: SyncMode::Initial(InitialSyncLimit::new(500).expect("limit")),
+                    scheduled_at_ms: 10,
+                })
+                .expect("schedule provider operation");
+        }
+
+        let gmail = fixture
+            .repository
+            .list_runnable_sync_operations(Provider::Gmail, 10, 10)
+            .expect("list Gmail operations");
+        let outlook = fixture
+            .repository
+            .list_runnable_sync_operations(Provider::Outlook, 10, 10)
+            .expect("list Outlook operations");
+        assert_eq!(gmail.len(), 1);
+        assert_eq!(gmail[0].operation_id, gmail_operation);
+        assert_eq!(outlook.len(), 1);
+        assert_eq!(outlook[0].operation_id, outlook_operation);
+
+        let wrong_provider = fixture
+            .repository
+            .claim_sync_operation(ClaimSyncOperationInput {
+                operation_id: gmail_operation,
+                provider: Provider::Outlook,
+                lease: OperationLease {
+                    id: LeaseId::new(),
+                    expires_at_ms: 100,
+                },
+                claimed_at_ms: 10,
+            })
+            .expect("mismatched claim is safe");
+        assert!(wrong_provider.is_none());
+        assert!(
+            fixture
+                .repository
+                .claim_sync_operation(ClaimSyncOperationInput {
+                    operation_id: gmail_operation,
+                    provider: Provider::Gmail,
+                    lease: OperationLease {
+                        id: LeaseId::new(),
+                        expires_at_ms: 100,
+                    },
+                    claimed_at_ms: 10,
+                })
+                .expect("matching claim")
+                .is_some()
+        );
     }
 
     fn message(
@@ -3383,6 +3707,7 @@ mod tests {
             .repository
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease,
                 claimed_at_ms: now_ms,
             })
@@ -3613,6 +3938,7 @@ mod tests {
             .repository
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease,
                 claimed_at_ms: 4,
             })
@@ -3777,6 +4103,7 @@ mod tests {
             .repository
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease: first_lease,
                 claimed_at_ms: 10,
             })
@@ -3828,6 +4155,7 @@ mod tests {
             .repository
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease: second_lease,
                 claimed_at_ms: 13,
             })
@@ -3892,6 +4220,7 @@ mod tests {
                 .repository
                 .claim_sync_operation(ClaimSyncOperationInput {
                     operation_id: second_scope,
+                    provider: Provider::Gmail,
                     lease: scope_lease,
                     claimed_at_ms: 20,
                 })
@@ -3903,6 +4232,7 @@ mod tests {
                 .repository
                 .claim_sync_operation(ClaimSyncOperationInput {
                     operation_id: third_scope,
+                    provider: Provider::Gmail,
                     lease: OperationLease {
                         id: LeaseId::new(),
                         expires_at_ms: 100,
@@ -3944,6 +4274,7 @@ mod tests {
                 .repository
                 .claim_sync_operation(ClaimSyncOperationInput {
                     operation_id: other_operation,
+                    provider: Provider::Outlook,
                     lease: OperationLease {
                         id: LeaseId::new(),
                         expires_at_ms: 100,
@@ -4041,6 +4372,7 @@ mod tests {
             .repository
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease: sync_lease,
                 claimed_at_ms: 10_000,
             })
@@ -4069,7 +4401,7 @@ mod tests {
         .expect("restart repository");
         assert_eq!(
             restarted
-                .list_runnable_sync_operations(5_000, 10)
+                .list_runnable_sync_operations(Provider::Gmail, 5_000, 10)
                 .expect("rollback sync due")
                 .len(),
             1
@@ -4077,6 +4409,7 @@ mod tests {
         let reclaimed_sync = restarted
             .claim_sync_operation(ClaimSyncOperationInput {
                 operation_id,
+                provider: Provider::Gmail,
                 lease: OperationLease {
                     id: LeaseId::new(),
                     expires_at_ms: 65_000,
@@ -4164,7 +4497,7 @@ mod tests {
         assert!(
             fixture
                 .repository
-                .list_runnable_sync_operations(12, 10)
+                .list_runnable_sync_operations(Provider::Gmail, 12, 10)
                 .expect("offline runnable query")
                 .is_empty()
         );

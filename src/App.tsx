@@ -1,6 +1,9 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import "./App.css";
+import { gmailOnboardingCopy } from "./content/gmail-onboarding.zh-CN";
+import { GmailOnboardingDialog } from "./features/accounts/GmailOnboardingDialog";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
+import { getConnectedAccounts, type ConnectedAccountSummary } from "./lib/ipc/gmail-onboarding";
 import {
   decodeStorageCommandError,
   getStorageStatus,
@@ -108,7 +111,15 @@ const folders: Array<{ icon: IconName; label: string; count?: number }> = [
   { icon: "draft", label: "草稿" },
 ];
 
-function Sidebar({ onCompose }: { onCompose: () => void }) {
+function Sidebar({
+  gmailAccount,
+  onAddAccount,
+  onCompose,
+}: {
+  gmailAccount: ConnectedAccountSummary | null;
+  onAddAccount: (account: ConnectedAccountSummary | null, opener: HTMLButtonElement) => void;
+  onCompose: () => void;
+}) {
   return (
     <aside className="sidebar" aria-label="邮箱导航">
       <div className="brand" aria-label="Unimail">
@@ -150,11 +161,19 @@ function Sidebar({ onCompose }: { onCompose: () => void }) {
             <Icon name="mail" size={16} />
           </span>
           <div>
-            <h2 id="account-heading">添加邮箱账户</h2>
-            <p>集中管理你的所有邮件</p>
+            <h2 id="account-heading">
+              {gmailAccount ? (gmailAccount.displayName ?? "Gmail") : "添加邮箱账户"}
+            </h2>
+            <p>{gmailAccount?.email ?? "集中管理你的所有邮件"}</p>
           </div>
         </div>
-        <button type="button">开始设置</button>
+        <button type="button" onClick={(event) => onAddAccount(gmailAccount, event.currentTarget)}>
+          {gmailAccount?.authState === "needs_authentication"
+            ? gmailOnboardingCopy.reconnect
+            : gmailAccount
+              ? gmailOnboardingCopy.viewAccount
+              : gmailOnboardingCopy.startSetup}
+        </button>
       </section>
       <button className="settings-button" type="button">
         <Icon name="settings" />
@@ -164,7 +183,13 @@ function Sidebar({ onCompose }: { onCompose: () => void }) {
   );
 }
 
-function MessageList({ onSync }: { onSync: () => void }) {
+function MessageList({
+  onAddAccount,
+  onSync,
+}: {
+  onAddAccount: (opener: HTMLButtonElement) => void;
+  onSync: () => void;
+}) {
   const searchId = useId();
 
   return (
@@ -218,7 +243,11 @@ function MessageList({ onSync }: { onSync: () => void }) {
         </div>
         <h2>收件箱空空如也</h2>
         <p>添加邮箱账户后，新邮件会出现在这里。</p>
-        <button className="secondary-action" type="button">
+        <button
+          className="secondary-action"
+          onClick={(event) => onAddAccount(event.currentTarget)}
+          type="button"
+        >
           添加邮箱账户
         </button>
       </div>
@@ -340,7 +369,11 @@ export default function App() {
   const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
   const [storageMessage, setStorageMessage] = useState("正在检查加密存储");
   const [syncMessage, setSyncMessage] = useState("等待添加账户");
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccountSummary[]>([]);
+  const [gmailDialogOpen, setGmailDialogOpen] = useState(false);
+  const [reconnectAccount, setReconnectAccount] = useState<ConnectedAccountSummary | null>(null);
   const composeButtonRef = useRef<HTMLDivElement>(null);
+  const gmailDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -350,6 +383,31 @@ export default function App() {
       })
       .catch(() => {
         /* Web preview and unavailable desktop IPC remain usable. */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getConnectedAccounts()
+      .then((accounts) => {
+        if (!active) return;
+        setConnectedAccounts(accounts);
+        if (
+          accounts.some(
+            (account) =>
+              account.provider === "gmail" && account.authState === "needs_authentication",
+          )
+        ) {
+          setSyncMessage("Gmail 账户需要重新连接");
+        } else if (accounts.some((account) => account.provider === "gmail")) {
+          setSyncMessage("Gmail 账户已连接");
+        }
+      })
+      .catch(() => {
+        /* Browser preview remains usable without desktop account IPC. */
       });
     return () => {
       active = false;
@@ -383,29 +441,75 @@ export default function App() {
 
   useEffect(() => {
     const openCompose = (event: KeyboardEvent) => {
+      if (gmailDialogOpen) return;
       if (event.key.toLowerCase() === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const target = event.target as HTMLElement | null;
-        if (target?.matches("input, textarea, [contenteditable='true']")) return;
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.matches("input, textarea, [contenteditable='true']")
+        ) {
+          return;
+        }
         event.preventDefault();
         setComposeOpen(true);
       }
     };
     window.addEventListener("keydown", openCompose);
     return () => window.removeEventListener("keydown", openCompose);
-  }, []);
+  }, [gmailDialogOpen]);
 
   const closeCompose = () => {
     setComposeOpen(false);
     composeButtonRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   };
 
+  const gmailAccount = connectedAccounts.find((account) => account.provider === "gmail") ?? null;
+
+  const openGmailDialog = useCallback(
+    (account: ConnectedAccountSummary | null, opener: HTMLButtonElement) => {
+      gmailDialogOpenerRef.current = opener;
+      setComposeOpen(false);
+      setReconnectAccount(account);
+      setGmailDialogOpen(true);
+    },
+    [],
+  );
+
+  const closeGmailDialog = useCallback(() => {
+    setGmailDialogOpen(false);
+    setReconnectAccount(null);
+    window.setTimeout(() => gmailDialogOpenerRef.current?.focus(), 0);
+  }, []);
+
+  const recordConnectedAccount = useCallback((account: ConnectedAccountSummary) => {
+    setConnectedAccounts((accounts) => [
+      account,
+      ...accounts.filter((existing) => existing.id !== account.id),
+    ]);
+    setSyncMessage("Gmail 已连接，正在准备同步收件箱");
+  }, []);
+
   return (
     <div className="app-frame">
       <div className="app-content" ref={composeButtonRef}>
-        <Sidebar onCompose={() => setComposeOpen(true)} />
-        <MessageList onSync={() => setSyncMessage("尚无可同步账户")} />
+        <Sidebar
+          gmailAccount={gmailAccount}
+          onAddAccount={openGmailDialog}
+          onCompose={() => setComposeOpen(true)}
+        />
+        <MessageList
+          onAddAccount={(opener) => openGmailDialog(null, opener)}
+          onSync={() => setSyncMessage(gmailAccount ? "正在请求 Gmail 同步" : "尚无可同步账户")}
+        />
         <ReaderPane />
         {composeOpen && <ComposePanel onClose={closeCompose} />}
+        {gmailDialogOpen && (
+          <GmailOnboardingDialog
+            reconnectAccount={reconnectAccount}
+            onClose={closeGmailDialog}
+            onConnected={recordConnectedAccount}
+          />
+        )}
       </div>
       <StatusBar
         appInfo={appInfo}

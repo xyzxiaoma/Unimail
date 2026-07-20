@@ -25,6 +25,8 @@ pub enum StorageError {
     Constraint,
     #[error("草稿版本冲突")]
     DraftRevisionConflict,
+    #[error("记录不存在")]
+    NotFound,
     #[error("数据序列化失败")]
     Serialization,
     #[error("当前平台不支持原生凭据存储")]
