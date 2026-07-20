@@ -392,7 +392,7 @@ pub(crate) fn oauth_state_from_authorization_url(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{io::ErrorKind, time::Duration};
 
     use tokio::{io::AsyncReadExt, net::TcpStream};
     use unimail_core::SensitiveString;
@@ -504,12 +504,26 @@ mod tests {
             "x".repeat(9 * 1024)
         )
         .into_bytes();
-        let client = tokio::spawn(exchange(port, oversized));
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                .await
+                .expect("connect callback");
+            tokio::io::AsyncWriteExt::write_all(&mut stream, &oversized)
+                .await
+                .expect("write callback");
+            let mut response = String::new();
+            let read_result = stream.read_to_string(&mut response).await;
+            (response, read_result)
+        });
         let result = receiver
             .receive("expected", &cancellation, Duration::from_secs(1))
             .await;
         assert!(matches!(result, Err(LoopbackError::OversizedRequest)));
-        let response = client.await.expect("client task");
+        let (response, read_result) = client.await.expect("client task");
+        if let Err(error) = read_result {
+            assert_eq!(error.kind(), ErrorKind::ConnectionReset);
+        }
+        assert!(response.is_empty() || response.starts_with("HTTP/1.1 400 Bad Request"));
         assert!(!response.contains("X-Fill"));
     }
 

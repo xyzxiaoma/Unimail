@@ -276,6 +276,9 @@ field, environment key, constructor argument, or frontend DTO.
   missing credential, and same-token concurrent single-flight.
 - REST tests: response-size/Retry-After mapping, request-response message identity, empty History
   IDs, attachment bounds, and all accepted/rejected/ambiguous send outcomes.
+- Loopback oversized-request tests assert the typed rejection and absence of request echo. They may
+  observe `ConnectionReset` after the server stops reading at its bound and closes with excess
+  client bytes still unread; requiring a complete error page here is platform-dependent and flaky.
 - Run provider tests plus workspace format, strict Clippy, tests, binding drift, and changed-path
   scans.
 
