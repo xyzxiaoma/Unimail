@@ -63,7 +63,7 @@
 - [x] `npm run check:changes`
 - [x] `npm audit --omit=dev`
 - [x] Scan tracked changes/output for Microsoft tokens, client secrets, authorization headers, delta links, attachment IDs, real mailbox data, databases, and local paths.
-- [ ] Push `main` and verify Windows/macOS unsigned test installers in GitHub Actions without creating a GitHub Release.
+- [x] Push `main` and verify Windows/macOS unsigned test installers in GitHub Actions without creating a GitHub Release.
 
 ## Risk and Rollback Points
 

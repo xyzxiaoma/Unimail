@@ -81,7 +81,7 @@ Deliver the Outlook V1 connection path for Windows and macOS: users can connect 
 - [x] HTTP contract tests cover `/me`, list/delta/get MIME, attachment metadata/value, PATCH, send/reply, pagination, malformed JSON/MIME, cancellation, `401`, `403`, `404`, `410`, `429`/Retry-After, `5xx`, request-ID redaction, immutable-ID headers, and response limits.
 - [x] Provider-aware scheduling proves an Outlook coordinator cannot claim Gmail/QQ/163 operations.
 - [x] The desktop UI can choose/start/cancel/retry/reconnect Outlook, list connected and needs-auth accounts, schedule initial sync, and never render an authorization URL.
-- [ ] Frontend tests, Rust format/Clippy/tests, binding drift, secret/path scans, dependency audit, and Windows/macOS unsigned builds pass.
+- [x] Frontend tests, Rust format/Clippy/tests, binding drift, secret/path scans, dependency audit, and Windows/macOS unsigned builds pass.
 - [x] `CHANGELOG.zh-CN.md` describes Outlook connection under `未发布`.
 - [x] Owner documentation covers personal and work/school login, latest-500, delta sync, read round-trip, MIME reply/threading, file/item attachments, send/Sent reconciliation, token expiry/reconnect, delta reset, cancellation, tenant consent errors, and redacted diagnostics.
 
