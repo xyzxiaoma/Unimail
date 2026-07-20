@@ -80,7 +80,7 @@ Implement Unimail's durable synchronization coordinator and offline safety bound
 - [x] Offline send preserves the draft plus a revision-bound review marker across restart; reconnect emits/query-exposes confirmation only, and provider send call count remains zero until explicit user action.
 - [x] Durable operation status recovers correctly after dropped events/UI reload and exposes only safe codes and identifiers.
 - [x] V1-to-V2 migration preserves existing accounts/mailboxes/messages/addresses/attachments/drafts/cursors and remains latest-to-latest idempotent.
-- [ ] Frontend checks, Rust formatting/Clippy/tests, binding drift, secret/path scans, dependency audit, and Windows/macOS CI builds pass.
+- [x] Frontend checks, Rust formatting/Clippy/tests, binding drift, secret/path scans, dependency audit, and Windows/macOS CI builds pass.
 
 ## Out of Scope
 

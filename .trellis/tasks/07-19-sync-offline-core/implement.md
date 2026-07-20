@@ -51,7 +51,7 @@
 - [x] `npm run build`
 - [x] `npm run check:changes`
 - [x] `npm audit --omit=dev`
-- [ ] Push `main` and verify native Windows/macOS unsigned test installers in GitHub Actions.
+- [x] Push `main` and verify native Windows/macOS unsigned test installers in GitHub Actions.
 
 ## Risk and Rollback Points
 
