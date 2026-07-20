@@ -1339,6 +1339,14 @@ mod tests {
         requests
     }
 
+    fn has_header(request: &str, expected_name: &str, expected_value: &str) -> bool {
+        request.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case(expected_name) && value.trim() == expected_value
+            })
+        })
+    }
+
     fn configured_provider(base: &str) -> (GraphProvider, AccountId, Arc<TestCredentials>) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let store = Arc::new(TestCredentials::default());
@@ -1459,11 +1467,11 @@ mod tests {
         assert!(requests[0].contains("mailFolders/inbox/messages"));
         assert!(requests[1].contains("/delta"));
         assert!(requests[2].contains("mailFolders/inbox/messages"));
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.contains("Prefer: IdType=\"ImmutableId\""))
-        );
+        assert!(requests.iter().all(|request| has_header(
+            request,
+            "Prefer",
+            "IdType=\"ImmutableId\""
+        )));
     }
 
     #[tokio::test]
@@ -1626,11 +1634,11 @@ mod tests {
         assert!(requests[1].starts_with(
             "GET /v1.0/me/messages/message-1/attachments/attachment-1/$value HTTP/1.1"
         ));
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.contains("Prefer: IdType=\"ImmutableId\""))
-        );
+        assert!(requests.iter().all(|request| has_header(
+            request,
+            "Prefer",
+            "IdType=\"ImmutableId\""
+        )));
     }
 
     #[tokio::test]

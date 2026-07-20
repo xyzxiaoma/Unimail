@@ -365,6 +365,8 @@ does not own.
 - HTTP/provider tests assert immutable-ID headers, gap-safe initial ordering, opaque pagination,
   tombstones, invalid cursor, MIME identity, file/item/reference attachments, idempotent read
   assignment, standard Base64 send/reply, `202`, rejection, and ambiguous outcome.
+- Raw HTTP fixture assertions compare header names case-insensitively and header values exactly;
+  HTTP/1 serialization is allowed to normalize field-name casing across platforms.
 - Cross-layer tests assert provider-aware generated bindings/decoders/dialog behavior and prove an
   Outlook coordinator cannot claim Gmail/QQ/163 operations.
 - Run strict Rust/frontend checks, binding drift, changed-path scans, and native Windows/macOS
