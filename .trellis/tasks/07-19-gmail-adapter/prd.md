@@ -80,7 +80,7 @@ Deliver the complete Gmail V1 connection path for the desktop application: a use
 - [x] HTTP contract tests cover profile/list/get/history/modify/attachment/send, pagination, malformed JSON, cancellation, `401`, retryable/non-retryable `403`, `429`/Retry-After, `5xx`, request-ID redaction, and response-size limits.
 - [x] Provider-aware scheduling proves a Gmail coordinator cannot claim an Outlook/QQ/163 account operation.
 - [x] The desktop UI can start/cancel Gmail setup, display safe progress/error states, create or reconnect the account, list the connected account, and schedule initial synchronization without exposing the authorization URL to React.
-- [ ] Frontend tests, Rust format/Clippy/tests, binding drift checks, secret/path scans, dependency audit, and Windows/macOS CI builds pass.
+- [x] Frontend tests, Rust format/Clippy/tests, binding drift checks, secret/path scans, dependency audit, and Windows/macOS CI builds pass.
 - [x] `CHANGELOG.zh-CN.md` describes the user-visible Gmail connection capability under `未发布`.
 - [x] Owner live-test documentation covers login, latest-500, incremental sync, read round-trip, reply/threading, attachment, send/Sent, token expiry/reconnect, History reset, cancellation, and redacted diagnostics.
 

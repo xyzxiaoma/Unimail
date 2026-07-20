@@ -54,7 +54,7 @@
 - [x] `npm run check:changes`
 - [x] `npm audit --omit=dev`
 - [x] Scan tracked files/output for OAuth tokens, client secrets, authorization headers, callback query values, real mailbox data, and local paths.
-- [ ] Push `main` and verify Windows/macOS unsigned test installers in GitHub Actions without creating a GitHub Release.
+- [x] Push `main` and verify Windows/macOS unsigned test installers in GitHub Actions without creating a GitHub Release.
 
 ## Risk and Rollback Points
 
