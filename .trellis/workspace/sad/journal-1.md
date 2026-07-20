@@ -144,3 +144,40 @@ Implemented runtime-neutral durable synchronization, SQLCipher schema V2, genera
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 完成 Gmail 适配器与桌面接入
+
+**Date**: 2026-07-20
+**Task**: 完成 Gmail 适配器与桌面接入
+**Branch**: `main`
+
+### Summary
+
+实现 Gmail PKCE OAuth、凭据刷新、REST 同步/附件/已读/发送边界、Provider 路由和桌面 onboarding；补齐中文文档与可执行规范，修复 macOS 超限回环测试的连接重置差异，并验证 Windows/macOS 无签名安装包 artifacts。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3c91fe8` | (see git log) |
+| `fcb6700` | (see git log) |
+| `6703d71` | (see git log) |
+| `fae332c` | (see git log) |
+| `8c244ed` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
