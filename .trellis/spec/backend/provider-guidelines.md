@@ -383,3 +383,86 @@ SyncPageState::More(redacted_next_link)
 // ... terminal baseline page ...
 SyncPageState::Complete(redacted_delta_link)
 ```
+
+## Scenario: QQ/163 authorization-code IMAP and SMTP adapter
+
+### 1. Scope / Trigger
+
+Apply when changing `crates/unimail-providers/src/imap/**`, QQ/163 runtime routing,
+authorization-code onboarding, IMAP cursors/read state, SMTP submission, or Sent reconciliation.
+
+### 2. Signatures
+
+```rust
+ImapAuthenticator::new(&QQ_PRESET | &NETEASE_PRESET, credential_store)
+ImapProvider::new(preset, credential_store, registry, SharedMimeCodec)
+ImapAccountRegistry::register(account_id, provider, credential_ref)
+
+connect_authorization_code_account(provider, account_id, account_address, authorization_code)
+```
+
+Only the fixed presets are accepted: QQ `imap.qq.com:993` / `smtp.qq.com:465` and 163
+`imap.163.com:993` / `smtp.163.com:465`, all implicit verified TLS.
+
+### 3. Contracts
+
+- The login identity is the normalized full address; the secret is a provider authorization code,
+  never the webmail password. It is immediately wrapped as `SensitiveString`, persisted only in a
+  versioned credential envelope, and represented elsewhere by `CredentialRef`.
+- Initial sync uses `UID SEARCH`, keeps the latest at-most-500 UIDs, and fetches exact MIME with
+  `BODY.PEEK[]`. Remote identity is account + mailbox + `UIDVALIDITY:UID`.
+- Durable cursor JSON contains version, mailbox, UIDVALIDITY, highest UID, and optional MODSEQ;
+  continuation cursors are not used because one bounded UID set completes the page.
+- 163 sends a bounded non-secret `ID` only when the server advertises the capability.
+- Read writes refetch flags first and use `UNCHANGEDSINCE` when CONDSTORE is available.
+- SMTP DATA disconnect is `UnknownAfterSubmission`. Sent Message-ID search may confirm it as
+  accepted; it never causes automatic resend. APPEND remains disabled until owner acceptance proves
+  a provider does not auto-save Sent.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Address domain differs from selected preset | `Permanent / *_account_address_invalid` |
+| Certificate is untrusted or peer is plaintext | TLS handshake failure; no downgrade |
+| LOGIN/AUTH rejection | `Authentication`; safe reconnect guidance |
+| UID missing or sequence-number-only response | `Protocol`; no remote mutation |
+| UIDVALIDITY changes | `InvalidCursor / imap_uidvalidity_changed`; bounded bootstrap |
+| Expected MODSEQ differs | `Transient / imap_read_conflict`; no blind STORE |
+| SMTP recipient 5xx | terminal `Rejected / smtp_recipient_rejected` |
+| SMTP 4xx before final acceptance | transient backoff |
+| Disconnect after DATA terminator | `UnknownAfterSubmission`; never generic retry |
+| Account save fails after credential creation | delete the new credential reference |
+
+### 5. Good / Base / Bad Cases
+
+- Good: sync uses UIDs, preserves unread state, commits MIME changes with one versioned cursor, and
+  a repeated run produces no duplicate remote identities.
+- Base: SPECIAL-USE is absent, so the preset's localized Sent fallbacks are searched without
+  changing generic IMAP behavior.
+- Bad: accept user-editable hosts, log raw frames, use sequence numbers as identities, retry a
+  post-DATA disconnect, or APPEND a Sent copy before checking Message-ID/provider auto-save.
+
+### 6. Tests Required
+
+- Scripted TLS tests cover trusted/untrusted certificates, plaintext refusal, fragmented frames,
+  LOGIN, capabilities, 163 ID, mailbox discovery, UIDVALIDITY, BODY.PEEK, flags, recipient outcomes,
+  DATA disconnect, and Message-ID reconciliation.
+- Cursor tests prove latest-500 bounds, UID-only incremental selection, redacted JSON/debug, and
+  UIDVALIDITY invalidation.
+- Cross-layer tests prove authorization-code IPC returns only `ConnectedAccountSummary`, provider
+  registries cannot claim Gmail/Outlook/another preset, and failed storage deletes new credentials.
+- Run workspace format/Clippy/tests, frontend checks, binding drift, changed paths, and unsigned
+  native build before owner acceptance.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: sequence numbers and a post-DATA transport retry can skip or duplicate mail.
+provider_message_id = fetch.message.to_string();
+return Err(transient_error("smtp_connection_lost"));
+
+// Correct: mailbox-scoped UID identity and terminal ambiguous submission.
+provider_message_id = format!("{uid_validity}:{uid}");
+return Ok(SendOutcome::UnknownAfterSubmission(unknown));
+```

@@ -186,7 +186,7 @@ oauth_onboarding_status(provider) / start_oauth_onboarding(provider, account_id)
 - Active states require a non-empty flow ID. The `connected` terminal state requires `flowId=null`,
   one account whose provider matches the top-level provider, and no error.
 - Only `gmail` and `outlook` are valid browser OAuth providers. QQ/163 authorization-code setup
-  must remain a separate later boundary.
+  remains a separate command, decoder, and dialog boundary.
 - Fixed error envelopes include the provider and must match that provider's Simplified Chinese
   message exactly.
 - Safe account summaries retain `needs_authentication` accounts so the sidebar can expose the
@@ -233,4 +233,68 @@ oauth_onboarding_status(provider) / start_oauth_onboarding(provider, account_id)
 
 // Correct: terminal status is provider-bound, secret-free, and restartable.
 { provider: "outlook", state: "connected", flowId: null, account: outlookAccount, error: null }
+```
+
+## Mandatory Seven-Section Scenario: QQ/163 authorization-code onboarding IPC
+
+### 1. Scope / Trigger
+
+Apply to `connect_authorization_code_account`, its generated binding/decoder, QQ/163 setup dialog,
+account restoration, and reconnect UI.
+
+### 2. Signature and Flow
+
+```text
+AuthorizationCodeOnboardingDialog
+  -> connectAuthorizationCodeAccount(provider, accountId, accountAddress, authorizationCode)
+  -> connect_authorization_code_account
+  -> ConnectedAccountSummary / fixed OAuthOnboardingCommandError envelope
+```
+
+### 3. Contract
+
+- Valid providers are exactly `qq` and `netease`; browser OAuth state and flow IDs are absent.
+- The authorization code exists only in the transient command input and local password field. The
+  command response, account list, errors, snapshots, and React state after completion contain no
+  secret or `CredentialRef`.
+- QQ requires `@qq.com`; 163 requires `@163.com`. Reconnect locks the existing normalized address.
+- The input is cleared on success and failure. Unverified command rejections render fixed generic
+  Chinese copy rather than payload text.
+
+### 4. Validation & Error Matrix
+
+| Condition | Frontend behavior |
+| --- | --- |
+| Wrong domain or empty local part | Block command and show provider-specific guidance |
+| Empty authorization code | Focus secret input and do not invoke IPC |
+| Valid safe account summary | Add/replace sidebar account and close dialog |
+| Fixed backend error envelope | Show its validated Chinese message |
+| Unknown/malformed rejection | Show generic unavailable copy; clear secret field |
+| Reconnect provider/address mismatch | Reject without replacing the existing account |
+
+### 5. Good / Base / Bad Cases
+
+- Good: choose QQ, enter a full address and authorization code, receive a secret-free account
+  summary, clear the input, and show the restored account after restart.
+- Base: switch between QQ and 163 before submission; switching clears address, secret, and errors.
+- Bad: reuse the OAuth dialog state machine, retain the authorization code after rejection, render
+  raw IPC errors, or serialize the secret into a response DTO.
+
+### 6. Tests Required
+
+- IPC tests assert exact command arguments and decode only `ConnectedAccountSummary`.
+- Dialog tests assert domain validation, empty-secret blocking, provider switching, success/error
+  clearing, reconnect address locking, and no OAuth browser command.
+- App tests assert QQ/163 provider names, reconnect labels, restored accounts, and dialog routing.
+- Run Prettier, ESLint, TypeScript, Vitest, binding drift, build, and changed-release-note checks.
+
+### 7. Wrong vs Correct
+
+```tsx
+// Wrong: secret survives in a reusable object or response model.
+setForm({ accountAddress, authorizationCode });
+
+// Correct: pass it directly to the command and clear the controlled field in both outcomes.
+await connectAuthorizationCodeAccount(provider, accountId, accountAddress, authorizationCode);
+setAuthorizationCode("");
 ```
