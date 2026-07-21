@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import "./App.css";
-import { onboardingCopy } from "./content/oauth-onboarding.zh-CN";
 import { OAuthOnboardingDialog } from "./features/accounts/OAuthOnboardingDialog";
+import { AuthorizationCodeOnboardingDialog } from "./features/accounts/AuthorizationCodeOnboardingDialog";
+import type { AuthorizationCodeProvider } from "./lib/ipc/authorization-code-onboarding";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
 import { getConnectedAccounts, type ConnectedAccountSummary } from "./lib/ipc/oauth-onboarding";
 import {
@@ -172,17 +173,24 @@ function Sidebar({
         {accounts.length > 0 && (
           <ul className="account-list">
             {accounts.map((account) => {
-              const provider = account.provider === "outlook" ? "outlook" : "gmail";
-              const copy = onboardingCopy(provider);
+              const providerName =
+                account.provider === "outlook"
+                  ? "Outlook"
+                  : account.provider === "qq"
+                    ? "QQ 邮箱"
+                    : account.provider === "netease"
+                      ? "163 邮箱"
+                      : "Gmail";
+              const reconnectLabel = `重新连接 ${providerName}`;
               return (
                 <li key={account.id}>
                   <button
                     type="button"
                     onClick={(event) => onAddAccount(account, event.currentTarget)}
                   >
-                    <span>{account.displayName ?? copy.providerName}</span>
+                    <span>{account.displayName ?? providerName}</span>
                     <small>{account.email}</small>
-                    {account.authState === "needs_authentication" && <em>{copy.reconnect}</em>}
+                    {account.authState === "needs_authentication" && <em>{reconnectLabel}</em>}
                   </button>
                 </li>
               );
@@ -389,6 +397,8 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("等待添加账户");
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccountSummary[]>([]);
   const [oauthDialogOpen, setOAuthDialogOpen] = useState(false);
+  const [authorizationCodeProvider, setAuthorizationCodeProvider] =
+    useState<AuthorizationCodeProvider | null>(null);
   const [reconnectAccount, setReconnectAccount] = useState<ConnectedAccountSummary | null>(null);
   const composeButtonRef = useRef<HTMLDivElement>(null);
   const oauthDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
@@ -417,7 +427,14 @@ export default function App() {
           (account) => account.authState === "needs_authentication",
         );
         if (needsAuthentication) {
-          const name = needsAuthentication.provider === "outlook" ? "Outlook" : "Gmail";
+          const name =
+            needsAuthentication.provider === "outlook"
+              ? "Outlook"
+              : needsAuthentication.provider === "qq"
+                ? "QQ 邮箱"
+                : needsAuthentication.provider === "netease"
+                  ? "163 邮箱"
+                  : "Gmail";
           setSyncMessage(`${name} 账户需要重新连接`);
         } else if (accounts.length > 0) {
           setSyncMessage(`已连接 ${String(accounts.length)} 个邮箱账户`);
@@ -485,13 +502,20 @@ export default function App() {
       oauthDialogOpenerRef.current = opener;
       setComposeOpen(false);
       setReconnectAccount(account);
-      setOAuthDialogOpen(true);
+      if (account?.provider === "qq" || account?.provider === "netease") {
+        setAuthorizationCodeProvider(account.provider);
+        setOAuthDialogOpen(false);
+      } else {
+        setAuthorizationCodeProvider(null);
+        setOAuthDialogOpen(true);
+      }
     },
     [],
   );
 
   const closeOAuthDialog = useCallback(() => {
     setOAuthDialogOpen(false);
+    setAuthorizationCodeProvider(null);
     setReconnectAccount(null);
     window.setTimeout(() => oauthDialogOpenerRef.current?.focus(), 0);
   }, []);
@@ -501,7 +525,14 @@ export default function App() {
       account,
       ...accounts.filter((existing) => existing.id !== account.id),
     ]);
-    const name = account.provider === "outlook" ? "Outlook" : "Gmail";
+    const name =
+      account.provider === "outlook"
+        ? "Outlook"
+        : account.provider === "qq"
+          ? "QQ 邮箱"
+          : account.provider === "netease"
+            ? "163 邮箱"
+            : "Gmail";
     setSyncMessage(`${name} 已连接，正在准备同步收件箱`);
   }, []);
 
@@ -523,6 +554,18 @@ export default function App() {
         {composeOpen && <ComposePanel onClose={closeCompose} />}
         {oauthDialogOpen && (
           <OAuthOnboardingDialog
+            reconnectAccount={reconnectAccount}
+            onClose={closeOAuthDialog}
+            onConnected={recordConnectedAccount}
+            onAuthorizationCodeProvider={(provider) => {
+              setOAuthDialogOpen(false);
+              setAuthorizationCodeProvider(provider);
+            }}
+          />
+        )}
+        {authorizationCodeProvider && (
+          <AuthorizationCodeOnboardingDialog
+            initialProvider={authorizationCodeProvider}
             reconnectAccount={reconnectAccount}
             onClose={closeOAuthDialog}
             onConnected={recordConnectedAccount}

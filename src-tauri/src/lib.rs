@@ -1,3 +1,4 @@
+mod authorization_onboarding;
 mod oauth;
 mod onboarding;
 mod runtime;
@@ -19,10 +20,12 @@ use unimail_providers::{
     SharedMimeCodec,
     gmail::{GmailAccountRegistry, GmailAuthenticator, GmailConfig, GmailProvider},
     graph::{GraphAccountRegistry, GraphAuthenticator, GraphConfig, GraphProvider},
+    imap::{ImapAccountRegistry, ImapAuthenticator, ImapProvider, NETEASE_PRESET, QQ_PRESET},
 };
 use unimail_storage::{NativeCredentialStore, SqlCipherRepository};
 
 use crate::{
+    authorization_onboarding::AuthorizationCodeManager,
     oauth::{DesktopCancellation, RedirectHost, SystemBrowserOpener},
     onboarding::{OAuthSessionConfig, OAuthSessionManager},
     runtime::{RuntimeRandom, SystemClock, TokioSyncStore},
@@ -63,6 +66,119 @@ impl StorageState {
 struct OAuthState {
     gmail: Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode>,
     outlook: Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode>,
+}
+
+struct AuthorizationCodeState {
+    qq: Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode>,
+    netease: Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode>,
+}
+
+impl AuthorizationCodeState {
+    fn initialize(storage: &StorageState, credentials: Arc<dyn CredentialStore>) -> Self {
+        let permits =
+            BoundedSyncPermitPool::new(4, 2).map(|pool| Arc::new(pool) as Arc<dyn SyncPermitPool>);
+        let registry = Arc::new(ImapAccountRegistry::new());
+        let qq = permits.as_ref().map_or_else(
+            || Err(OAuthOnboardingErrorCode::Internal),
+            |permits| {
+                Self::build(
+                    storage,
+                    Arc::clone(&credentials),
+                    Arc::clone(&registry),
+                    Arc::clone(permits),
+                    &QQ_PRESET,
+                )
+            },
+        );
+        let netease = permits.map_or_else(
+            || Err(OAuthOnboardingErrorCode::Internal),
+            |permits| Self::build(storage, credentials, registry, permits, &NETEASE_PRESET),
+        );
+        Self { qq, netease }
+    }
+
+    fn build(
+        storage: &StorageState,
+        credentials: Arc<dyn CredentialStore>,
+        registry: Arc<ImapAccountRegistry>,
+        permits: Arc<dyn SyncPermitPool>,
+        preset: &'static unimail_providers::imap::ImapSmtpPreset,
+    ) -> Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode> {
+        let repository = storage
+            .repository
+            .as_ref()
+            .map_err(|_| OAuthOnboardingErrorCode::StorageUnavailable)?;
+        let authenticator = Arc::new(ImapAuthenticator::new(preset, Arc::clone(&credentials)));
+        let provider = Arc::new(
+            ImapProvider::new(
+                preset,
+                Arc::clone(&credentials),
+                Arc::clone(&registry),
+                SharedMimeCodec::new(),
+            )
+            .map_err(|_| OAuthOnboardingErrorCode::Internal)?,
+        );
+        let repository_port: Arc<dyn StorageRepository> = repository.clone();
+        let provider: Arc<dyn SyncProvider> = provider;
+        let coordinator = build_coordinator(provider, repository_port, permits)?;
+        for account in repository
+            .list_accounts()
+            .map_err(|_| OAuthOnboardingErrorCode::StorageUnavailable)?
+            .into_iter()
+            .filter(|account| {
+                account.provider == preset.provider
+                    && account.enabled
+                    && !account.deleting
+                    && account.auth_state == AccountAuthState::Connected
+            })
+        {
+            registry
+                .register(account.id, account.provider, account.credential_ref)
+                .map_err(|_| OAuthOnboardingErrorCode::Internal)?;
+        }
+        spawn_startup_drain(
+            Arc::clone(&coordinator),
+            repository.clone(),
+            preset.provider,
+            Arc::clone(&registry),
+        );
+        Ok(Arc::new(AuthorizationCodeManager::new(
+            preset.provider,
+            authenticator,
+            repository.clone(),
+            credentials,
+            registry,
+            coordinator,
+        )))
+    }
+
+    fn manager(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Qq => self.qq.clone(),
+            Provider::Netease => self.netease.clone(),
+            Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    async fn connected_accounts(
+        &self,
+    ) -> Result<Vec<ConnectedAccountSummary>, OAuthOnboardingCommandError> {
+        let mut accounts = self
+            .manager(Provider::Qq)
+            .map_err(|code| OAuthOnboardingCommandError::from_code(Provider::Qq, code))?
+            .connected_accounts()
+            .await?;
+        accounts.extend(
+            self.manager(Provider::Netease)
+                .map_err(|code| OAuthOnboardingCommandError::from_code(Provider::Netease, code))?
+                .connected_accounts()
+                .await?,
+        );
+        Ok(accounts)
+    }
 }
 
 impl OAuthState {
@@ -275,6 +391,12 @@ impl RuntimeAccountRegistry for GraphAccountRegistry {
     }
 }
 
+impl RuntimeAccountRegistry for ImapAccountRegistry {
+    fn remove_account(&self, account_id: unimail_core::AccountId) -> Result<(), ()> {
+        self.remove(account_id).map_err(|_| ())
+    }
+}
+
 fn spawn_startup_drain<R>(
     coordinator: Arc<SyncCoordinator>,
     repository: Arc<SqlCipherRepository>,
@@ -423,9 +545,29 @@ fn cancel_oauth_onboarding(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri command state is a framework-owned extractor.
 async fn connected_accounts(
-    state: tauri::State<'_, OAuthState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
 ) -> Result<Vec<ConnectedAccountSummary>, OAuthOnboardingCommandError> {
-    state.connected_accounts().await
+    let mut accounts = oauth_state.connected_accounts().await?;
+    accounts.extend(authorization_state.connected_accounts().await?);
+    accounts.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(accounts)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn connect_authorization_code_account(
+    provider: Provider,
+    account_id: Option<String>,
+    account_address: String,
+    authorization_code: String,
+    state: tauri::State<'_, AuthorizationCodeState>,
+) -> Result<ConnectedAccountSummary, OAuthOnboardingCommandError> {
+    state
+        .manager(provider)
+        .map_err(|code| OAuthOnboardingCommandError::from_code(provider, code))?
+        .connect(account_id, account_address, authorization_code)
+        .await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -440,9 +582,11 @@ pub fn run() {
             let credentials: Arc<dyn CredentialStore> =
                 Arc::new(NativeCredentialStore::new(app.config().identifier.clone()));
             let storage = StorageState::initialize(app, Arc::clone(&credentials));
-            let oauth = OAuthState::initialize(&storage, credentials);
+            let oauth = OAuthState::initialize(&storage, Arc::clone(&credentials));
+            let authorization_code = AuthorizationCodeState::initialize(&storage, credentials);
             app.manage(storage);
             app.manage(oauth);
+            app.manage(authorization_code);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -451,6 +595,7 @@ pub fn run() {
             oauth_onboarding_status,
             start_oauth_onboarding,
             cancel_oauth_onboarding,
+            connect_authorization_code_account,
             connected_accounts
         ])
         .run(tauri::generate_context!())

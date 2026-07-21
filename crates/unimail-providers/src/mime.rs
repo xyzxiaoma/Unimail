@@ -30,6 +30,40 @@ impl SharedMimeCodec {
     pub const fn new() -> Self {
         Self
     }
+
+    pub(crate) fn attachment_bytes(
+        raw: &[u8],
+        part_id: &str,
+        limits: MimeLimits,
+    ) -> Result<Vec<u8>, MimeError> {
+        if raw.len() > limits.max_raw_bytes {
+            return Err(limit_error("raw_too_large"));
+        }
+        let part_id = part_id
+            .strip_prefix("mime-")
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| parse_error("attachment_part_invalid"))?;
+        let message = parser()
+            .parse(raw)
+            .ok_or_else(|| parse_error("invalid_message"))?;
+        validate_decoded_resources(&message, limits)?;
+        if !message.attachments.contains(&part_id) {
+            return Err(parse_error("attachment_part_missing"));
+        }
+        let part = message
+            .part(part_id)
+            .ok_or_else(|| parse_error("attachment_part_missing"))?;
+        let bytes = match &part.body {
+            PartType::Text(value) | PartType::Html(value) => value.as_bytes().to_vec(),
+            PartType::Binary(value) | PartType::InlineBinary(value) => value.to_vec(),
+            PartType::Message(value) => value.raw_message().to_vec(),
+            PartType::Multipart(_) => return Err(parse_error("attachment_part_invalid")),
+        };
+        if bytes.len() > limits.max_attachment_bytes {
+            return Err(limit_error("attachment_too_large"));
+        }
+        Ok(bytes)
+    }
 }
 
 impl MimeCodec for SharedMimeCodec {
@@ -747,6 +781,40 @@ mod tests {
         );
         assert_eq!(parsed.attachments[0].size_bytes, Some(4));
         assert!(parsed.attachments[0].inline);
+    }
+
+    #[test]
+    fn extracts_attachment_bytes_using_the_same_parser_and_part_id() {
+        let raw = concat!(
+            "From: sender@example.test\r\n",
+            "To: owner@example.test\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed; boundary=boundary\r\n",
+            "\r\n",
+            "--boundary\r\n",
+            "Content-Type: text/plain\r\n\r\n",
+            "body\r\n",
+            "--boundary\r\n",
+            "Content-Type: application/octet-stream\r\n",
+            "Content-Disposition: attachment; filename=file.bin\r\n",
+            "Content-Transfer-Encoding: base64\r\n\r\n",
+            "cHJpdmF0ZS1hdHRhY2htZW50\r\n",
+            "--boundary--\r\n",
+        );
+        let codec = SharedMimeCodec::new();
+        let parsed = codec.parse(raw.as_bytes(), MimeLimits::default()).unwrap();
+        let part_id = &parsed.attachments[0].part_id;
+        assert_eq!(
+            SharedMimeCodec::attachment_bytes(raw.as_bytes(), part_id, MimeLimits::default())
+                .unwrap(),
+            b"private-attachment"
+        );
+        assert_eq!(
+            SharedMimeCodec::attachment_bytes(raw.as_bytes(), "mime-999", MimeLimits::default(),)
+                .unwrap_err()
+                .code,
+            "attachment_part_missing"
+        );
     }
 
     #[test]

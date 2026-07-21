@@ -46,6 +46,10 @@ export function cancelOauthOnboarding(provider: Provider, flowId: string): Promi
   return invoke("cancel_oauth_onboarding", { provider, flowId });
 }
 
+export function connectAuthorizationCodeAccount(provider: Provider, accountId: string | null, accountAddress: string, authorizationCode: string): Promise<unknown> {
+  return invoke("connect_authorization_code_account", { provider, accountId, accountAddress, authorizationCode });
+}
+
 export function connectedAccounts(): Promise<unknown> {
   return invoke("connected_accounts");
 }

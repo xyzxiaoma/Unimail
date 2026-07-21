@@ -9,6 +9,7 @@ import {
   type OAuthProvider,
   type OAuthOnboardingStatus,
 } from "../../lib/ipc/oauth-onboarding";
+import type { AuthorizationCodeProvider } from "../../lib/ipc/authorization-code-onboarding";
 
 const pollIntervalMs = 750;
 
@@ -17,6 +18,7 @@ type OAuthOnboardingDialogProps = {
   reconnectAccount: ConnectedAccountSummary | null;
   onClose: () => void;
   onConnected: (account: ConnectedAccountSummary) => void;
+  onAuthorizationCodeProvider?: (provider: AuthorizationCodeProvider) => void;
 };
 
 function isActive(status: OAuthOnboardingStatus | null): boolean {
@@ -81,6 +83,7 @@ export function OAuthOnboardingDialog({
   reconnectAccount,
   onClose,
   onConnected,
+  onAuthorizationCodeProvider,
 }: OAuthOnboardingDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
@@ -276,6 +279,20 @@ export function OAuthOnboardingDialog({
                 {onboardingCopy(candidate).providerName}
               </button>
             ))}
+            <button
+              disabled={commandPending}
+              onClick={() => onAuthorizationCodeProvider?.("qq")}
+              type="button"
+            >
+              QQ 邮箱
+            </button>
+            <button
+              disabled={commandPending}
+              onClick={() => onAuthorizationCodeProvider?.("netease")}
+              type="button"
+            >
+              163 邮箱
+            </button>
           </div>
         )}
 

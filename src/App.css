@@ -822,6 +822,34 @@ kbd {
   gap: 8px;
   margin-top: 18px;
 }
+
+.authorization-code-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.authorization-code-fields label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.authorization-code-fields input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 11px 12px;
+  font: inherit;
+}
+
+.authorization-code-fields input:focus {
+  border-color: var(--accent);
+  outline: 3px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
 .oauth-dialog-actions button {
   padding: 8px 14px;
   color: #6e6569;
