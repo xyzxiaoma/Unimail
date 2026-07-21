@@ -3,7 +3,7 @@
   "name": "imap-qq-163",
   "title": "QQ and 163 IMAP SMTP",
   "description": "Implement the IMAP/SMTP engine, QQ and 163 provider presets, read state, Sent handling, and owner test guidance.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
