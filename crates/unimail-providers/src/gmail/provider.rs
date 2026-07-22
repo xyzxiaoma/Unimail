@@ -11,8 +11,8 @@ use unimail_core::{
     NormalizedMimeMessage, OpaqueProviderCursor, PageContinuation, Provider, ProviderError,
     ProviderErrorKind, ProviderFuture, ProviderResult, ProviderRevision, ReadStateAck,
     ReconciliationKey, RejectedSend, RemoteChange, RemoteMailbox, RemoteMailboxKey, RemoteMessage,
-    RemoteMessageKey, SendOutcome, SendRequest, SetReadRequest, SyncPage, SyncPageState,
-    UnknownSend,
+    RemoteMessageKey, SendOutcome, SendRequest, SentReconciliationRequest,
+    SentReconciliationResult, SetReadRequest, SyncPage, SyncPageState, UnknownSend,
 };
 use url::Url;
 
@@ -408,6 +408,66 @@ impl GmailProvider {
         self.normalize_message(account_id, mailbox_id, &raw, full)
     }
 
+    async fn find_sent_message(
+        &self,
+        request: &SentReconciliationRequest,
+        cancellation: &dyn Cancellation,
+    ) -> ProviderResult<SentReconciliationResult> {
+        let credential_ref = self.registry.get(request.account_id)?;
+        let mut list_url = self.api_url(&["users", "me", "messages"])?;
+        {
+            let mut query = list_url.query_pairs_mut();
+            query
+                .append_pair("labelIds", "SENT")
+                .append_pair("maxResults", "10")
+                .append_pair(
+                    "q",
+                    &format!("rfc822msgid:{}", request.reconciliation_key.expose()),
+                );
+        }
+        let listed: MessageList = self
+            .authorized_json(&credential_ref, cancellation, false, |client, token| {
+                client.get(list_url.clone()).bearer_auth(token)
+            })
+            .await?;
+        for candidate in listed.messages {
+            if request
+                .provider_message_id
+                .as_deref()
+                .is_some_and(|id| id != candidate.id)
+            {
+                continue;
+            }
+            let mut message = self
+                .fetch_remote_message(
+                    request.account_id,
+                    "SENT",
+                    &candidate.id,
+                    &credential_ref,
+                    cancellation,
+                )
+                .await?;
+            if normalized_message_id(message.mime.message_id.as_deref())
+                != normalized_message_id(Some(request.reconciliation_key.expose()))
+            {
+                continue;
+            }
+            message.sent_at_ms = Some(message.received_at_ms);
+            return Ok(SentReconciliationResult::Found {
+                mailbox: RemoteMailbox {
+                    key: RemoteMailboxKey {
+                        account_id: request.account_id,
+                        provider_mailbox_id: "SENT".to_owned(),
+                    },
+                    role: MailboxRole::Sent,
+                    display_name: "已发送".to_owned(),
+                },
+                message: Box::new(message),
+            });
+        }
+        Ok(SentReconciliationResult::Pending)
+    }
+
     fn normalize_message(
         &self,
         account_id: AccountId,
@@ -778,6 +838,17 @@ impl MailProvider for GmailProvider {
             ))
         })
     }
+
+    fn find_sent<'a>(
+        &'a self,
+        request: SentReconciliationRequest,
+        cancellation: &'a dyn Cancellation,
+    ) -> ProviderFuture<'a, SentReconciliationResult> {
+        Box::pin(async move {
+            ensure_not_cancelled(cancellation)?;
+            self.find_sent_message(&request, cancellation).await
+        })
+    }
 }
 
 impl fmt::Debug for GmailProvider {
@@ -951,6 +1022,14 @@ fn has_label(message: &GmailMessage, label: &str) -> bool {
     message.label_ids.iter().any(|value| value == label)
 }
 
+fn normalized_message_id(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix('<').unwrap_or(value))
+        .map(|value| value.strip_suffix('>').unwrap_or(value))
+}
+
 fn overlay_part_ids(
     attachments: &mut [MimeAttachment],
     payload: Option<&GmailPart>,
@@ -1073,7 +1152,8 @@ mod tests {
         AccountId, AttachmentRequest, AttachmentSink, AttachmentSinkError, AttachmentSinkFuture,
         ComposedMessage, CredentialRef, CredentialStore, CredentialStoreError, CredentialStoreKind,
         DeliveryEnvelope, FetchBodyRequest, IncrementalSyncRequest, InitialSyncLimit,
-        ProviderError, ProviderErrorKind, RemoteChange, SecretBytes, SendOutcome, SendRequest,
+        ProviderError, ProviderErrorKind, ReconciliationKey, RemoteChange, SecretBytes,
+        SendOutcome, SendRequest, SentReconciliationRequest, SentReconciliationResult,
         SetReadRequest, SyncPageState,
     };
 
@@ -1730,5 +1810,51 @@ mod tests {
         .expect("valid response should be accepted");
 
         assert!(matches!(outcome, SendOutcome::Accepted(_)));
+    }
+
+    #[tokio::test]
+    async fn sent_reconciliation_requires_sent_search_and_matching_message_id() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let raw = URL_SAFE_NO_PAD.encode(raw_message());
+        let (base, server) = scripted_server(vec![
+            ScriptedResponse {
+                status: "200 OK",
+                body: json!({"messages":[{"id":"sent-1"}]}).to_string(),
+            },
+            ScriptedResponse {
+                status: "200 OK",
+                body: json!({"id":"sent-1","raw":raw}).to_string(),
+            },
+            ScriptedResponse {
+                status: "200 OK",
+                body: json!({
+                    "id":"sent-1",
+                    "threadId":"thread-1",
+                    "labelIds":["SENT"],
+                    "historyId":"31",
+                    "internalDate":"1000"
+                })
+                .to_string(),
+            },
+        ])
+        .await;
+        let (provider, account_id) = test_provider(&base);
+
+        let result = MailProvider::find_sent(
+            &provider,
+            SentReconciliationRequest {
+                account_id,
+                provider_message_id: Some("sent-1".to_owned()),
+                reconciliation_key: ReconciliationKey::new("message-1@example.com"),
+            },
+            &crate::fake::FakeCancellation::default(),
+        )
+        .await
+        .expect("Sent lookup should succeed");
+        assert!(matches!(result, SentReconciliationResult::Found { .. }));
+        let requests = server.await.expect("server should finish");
+        assert!(requests[0].contains("labelIds=SENT"));
+        assert!(requests[0].contains("rfc822msgid%3Amessage-1%40example.com"));
+        assert!(requests.iter().all(|request| !request.contains("/send")));
     }
 }

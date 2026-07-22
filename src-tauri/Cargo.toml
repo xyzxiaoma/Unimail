@@ -26,11 +26,13 @@ serde = { version = "1.0", features = ["derive"] }
 subtle = "2.6"
 tauri = { version = "2.11", features = [] }
 tokio = { version = "1.49", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+time = { version = "0.3.44", features = ["formatting"] }
 unimail-core = { path = "../crates/unimail-core" }
 unimail-application = { path = "../crates/unimail-application" }
 unimail-providers = { path = "../crates/unimail-providers" }
 unimail-storage = { path = "../crates/unimail-storage" }
 url = "2.5"
+uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
 secrecy = "0.10"

@@ -9,8 +9,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use unimail_core::{
     Account, AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult,
     AccountCreateInput, AccountId, AddressRole, Attachment, AttachmentId,
-    ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
-    CredentialRef, CredentialStore, DeleteAccountResult, DesiredReadMutation,
+    AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput, ComposedMessage, CredentialRef,
+    CredentialStore, DeleteAccountResult, DeliveryEnvelope, DesiredReadMutation,
     DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput, DraftId, DraftSaveInput,
     DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary, DurableCheckpoint,
     InboxListInput, InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId, MailboxRole,
@@ -18,12 +19,15 @@ use unimail_core::{
     MessageId, MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput,
     MessageSummary, MessageUpsertInput, MessageUpsertResult, MimeAddressRole,
     OfflineDraftReviewInput, OfflineDraftReviewResult, OpaqueProviderCursor, OperationId,
-    OperationLease, Provider, ProviderRevision, ReadIntentGeneration, RemoteChange, RemoteMailbox,
-    RemoteMessage, RemoteMessageKey, RepositoryError, RepositoryResult, SafeErrorCode,
-    ScheduleSyncInput, SendConfirmationRequired, StorageRepository, StorageStatus, SyncBatchInput,
-    SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation, SyncOperationSummary,
-    SyncStage, SyncState, SyncTrigger, SyncTriggerSet, TransitionDesiredReadMutationInput,
-    TransitionSyncOperationInput,
+    OperationLease, OutboundAttempt, OutboundAttemptId, OutboundAttemptOutcome,
+    OutboundAttemptSnapshot, OutboundAttemptState, OutboundFailureCode,
+    PrepareOutboundAttemptInput, Provider, ProviderRevision, ReadIntentGeneration,
+    ReconcileOutboundAttemptInput, RecordSentRefreshInput, RemoteChange, RemoteMailbox,
+    RemoteMessage, RemoteMessageKey, ReplySource, RepositoryError, RepositoryResult, SafeErrorCode,
+    ScheduleSyncInput, SendConfirmationRequired, SentProjection, StorageRepository, StorageStatus,
+    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation,
+    SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
+    TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
 use crate::{ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError};
@@ -498,6 +502,12 @@ impl StorageRepository for SqlCipherRepository {
             .map_err(map_storage_error)
     }
 
+    fn get_reply_source(&self, message_id: MessageId) -> RepositoryResult<Option<ReplySource>> {
+        self.store
+            .with_connection(|connection| get_reply_source(connection, message_id))
+            .map_err(map_storage_error)
+    }
+
     fn set_message_read(
         &self,
         input: MessageReadStateInput,
@@ -559,7 +569,7 @@ impl StorageRepository for SqlCipherRepository {
             .map_err(map_storage_error)
     }
 
-    fn list_drafts(&self, account_id: AccountId) -> RepositoryResult<Vec<DraftSummary>> {
+    fn list_drafts(&self, account_id: Option<AccountId>) -> RepositoryResult<Vec<DraftSummary>> {
         self.store
             .with_connection(|connection| list_drafts(connection, account_id))
             .map_err(map_storage_error)
@@ -597,6 +607,74 @@ impl StorageRepository for SqlCipherRepository {
     fn consume_draft_send_review(&self, key: DraftSendReviewKey) -> RepositoryResult<bool> {
         self.store
             .with_connection(|connection| consume_draft_send_review(connection, key))
+            .map_err(map_storage_error)
+    }
+
+    fn prepare_outbound_attempt(
+        &self,
+        input: PrepareOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt> {
+        self.store
+            .with_transaction(|transaction| prepare_outbound_attempt(transaction, &input))
+            .map_err(map_storage_error)
+    }
+
+    fn complete_outbound_attempt(
+        &self,
+        input: CompleteOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt> {
+        self.store
+            .with_transaction(|transaction| complete_outbound_attempt(transaction, &input))
+            .map_err(map_storage_error)
+    }
+
+    fn get_outbound_attempt(
+        &self,
+        attempt_id: OutboundAttemptId,
+    ) -> RepositoryResult<Option<OutboundAttempt>> {
+        self.store
+            .with_connection(|connection| get_outbound_attempt(connection, attempt_id))
+            .map_err(map_storage_error)
+    }
+
+    fn list_sent_projections(
+        &self,
+        account_id: Option<AccountId>,
+    ) -> RepositoryResult<Vec<SentProjection>> {
+        self.store
+            .with_connection(|connection| list_sent_projections(connection, account_id))
+            .map_err(map_storage_error)
+    }
+
+    fn record_sent_refresh(&self, input: RecordSentRefreshInput) -> RepositoryResult<u32> {
+        self.store
+            .with_connection(|connection| record_sent_refresh(connection, input))
+            .map_err(map_storage_error)
+    }
+
+    fn authorize_outbound_retry(
+        &self,
+        input: AuthorizeOutboundRetryInput,
+    ) -> RepositoryResult<bool> {
+        self.store
+            .with_connection(|connection| authorize_outbound_retry(connection, input))
+            .map_err(map_storage_error)
+    }
+
+    fn reconcile_outbound_attempt(
+        &self,
+        input: ReconcileOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt> {
+        self.store
+            .with_transaction(|transaction| reconcile_outbound_attempt(transaction, &input))
+            .map_err(map_storage_error)
+    }
+
+    fn recover_submitting_outbound_attempts(&self, recovered_at_ms: i64) -> RepositoryResult<u32> {
+        self.store
+            .with_connection(|connection| {
+                recover_submitting_outbound_attempts(connection, recovered_at_ms)
+            })
             .map_err(map_storage_error)
     }
 
@@ -1443,6 +1521,91 @@ fn get_message(
     }))
 }
 
+fn get_reply_source(
+    connection: &Connection,
+    message_id: MessageId,
+) -> Result<Option<ReplySource>, StorageError> {
+    type ReplyRow = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+        Option<String>,
+    );
+    let row: Option<ReplyRow> = connection
+        .query_row(
+            "SELECT m.account_id, m.provider_message_id, m.thread_id, m.rfc_message_id,
+                    m.references_json, m.subject, m.body_plain, m.received_at_ms,
+                    (SELECT display_name FROM message_addresses a
+                     WHERE a.message_id=m.id AND a.role='from' ORDER BY position LIMIT 1),
+                    (SELECT address FROM message_addresses a
+                     WHERE a.message_id=m.id AND a.role='from' ORDER BY position LIMIT 1)
+             FROM messages m WHERE m.id=?1",
+            [message_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let Some((
+        account_id,
+        original_provider_message_id,
+        provider_thread_id,
+        rfc_message_id,
+        references_json,
+        subject,
+        plain_body,
+        received_at_ms,
+        sender_name,
+        sender_address,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let sender_address = sender_address
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(StorageError::Serialization)?;
+    let references: Vec<String> =
+        serde_json::from_str(&references_json).map_err(|_| StorageError::Serialization)?;
+    if references.iter().any(|value| value.trim().is_empty())
+        || original_provider_message_id.trim().is_empty()
+    {
+        return Err(StorageError::Serialization);
+    }
+    Ok(Some(ReplySource {
+        message_id,
+        account_id: parse_id(&account_id)?,
+        provider_thread_id,
+        original_provider_message_id,
+        rfc_message_id,
+        references,
+        sender: DraftAddress {
+            display_name: sender_name,
+            address: sender_address,
+        },
+        subject,
+        plain_body,
+        received_at_ms,
+    }))
+}
+
 fn load_message_addresses(
     connection: &Connection,
     message_id: MessageId,
@@ -1767,24 +1930,30 @@ fn decode_draft_addresses(
 
 fn list_drafts(
     connection: &Connection,
-    account_id: AccountId,
+    account_id: Option<AccountId>,
 ) -> Result<Vec<DraftSummary>, StorageError> {
     let mut statement = connection
-        .prepare("SELECT id, subject, recipients_json, revision, updated_at_ms FROM drafts WHERE account_id=?1 ORDER BY updated_at_ms DESC, id DESC")
+        .prepare(
+            "SELECT id, account_id, subject, recipients_json, revision, updated_at_ms
+             FROM drafts WHERE (?1 IS NULL OR account_id=?1)
+             ORDER BY updated_at_ms DESC, id DESC",
+        )
         .map_err(|error| StorageError::from_sql(&error))?;
+    let account = account_id.map(|id| id.to_string());
     let rows = statement
-        .query_map([account_id.to_string()], |row| {
+        .query_map([account], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, String>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(|error| StorageError::from_sql(&error))?;
     rows.map(|row| {
-        let (id, subject, recipients, revision, updated_at_ms) =
+        let (id, account_id, subject, recipients, revision, updated_at_ms) =
             row.map_err(|error| StorageError::from_sql(&error))?;
         let value: serde_json::Value =
             serde_json::from_str(&recipients).map_err(|_| StorageError::Serialization)?;
@@ -1799,7 +1968,7 @@ fn list_drafts(
             .sum::<usize>();
         Ok(DraftSummary {
             id: parse_id(&id)?,
-            account_id,
+            account_id: parse_id(&account_id)?,
             subject,
             recipient_count: u32::try_from(recipient_count)
                 .map_err(|_| StorageError::Serialization)?,
@@ -2307,6 +2476,510 @@ fn consume_draft_send_review(
         .map_err(|error| StorageError::from_sql(&error))
 }
 
+fn prepare_outbound_attempt(
+    connection: &Connection,
+    input: &PrepareOutboundAttemptInput,
+) -> Result<OutboundAttempt, StorageError> {
+    if input.date_rfc2822.trim().is_empty()
+        || input.message.as_bytes().is_empty()
+        || input.message.message_id.trim().is_empty()
+        || input.message.envelope.from != input.snapshot.sender.address
+        || input.message.envelope.recipients.is_empty()
+    {
+        return Err(StorageError::Constraint);
+    }
+    let draft: Option<(String, i64)> = connection
+        .query_row(
+            "SELECT account_id, revision FROM drafts WHERE id=?1",
+            [input.draft_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let Some((account_id, revision)) = draft else {
+        return Err(StorageError::DraftRevisionConflict);
+    };
+    if account_id != input.account_id.to_string()
+        || u64::try_from(revision).ok() != Some(input.draft_revision)
+    {
+        return Err(StorageError::DraftRevisionConflict);
+    }
+    let blocked: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM outbound_attempts WHERE draft_id=?1 AND send_blocked=1
+             )",
+            [input.draft_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    if blocked {
+        return Err(StorageError::Constraint);
+    }
+    let recipients = serde_json::json!({
+        "to": encode_draft_addresses(&input.snapshot.to),
+        "cc": encode_draft_addresses(&input.snapshot.cc),
+        "bcc": encode_draft_addresses(&input.snapshot.bcc),
+    });
+    let sender = encode_draft_address(&input.snapshot.sender);
+    let envelope_recipients = serde_json::to_string(&input.message.envelope.recipients)
+        .map_err(|_| StorageError::Serialization)?;
+    connection
+        .execute(
+            "INSERT INTO outbound_attempts(
+                id, account_id, draft_id, draft_revision, reply_source_message_id,
+                provider_thread_id, original_provider_message_id, rfc_message_id,
+                date_rfc2822, exact_mime, envelope_from, envelope_recipients_json,
+                sender_json, recipients_json, subject, body_plain, state, send_blocked,
+                created_at_ms, updated_at_ms
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14, ?15, ?16, 'submitting', 1, ?17, ?17
+             )",
+            params![
+                input.id.to_string(),
+                input.account_id.to_string(),
+                input.draft_id.to_string(),
+                i64::try_from(input.draft_revision).map_err(|_| StorageError::Constraint)?,
+                input.in_reply_to_message_id.map(|id| id.to_string()),
+                input.provider_thread_id,
+                input.original_provider_message_id,
+                input.message.message_id,
+                input.date_rfc2822,
+                input.message.as_bytes(),
+                input.message.envelope.from,
+                envelope_recipients,
+                sender.to_string(),
+                recipients.to_string(),
+                input.snapshot.subject,
+                input.snapshot.plain_body,
+                input.created_at_ms,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    get_outbound_attempt(connection, input.id)?.ok_or(StorageError::Serialization)
+}
+
+fn complete_outbound_attempt(
+    connection: &Connection,
+    input: &CompleteOutboundAttemptInput,
+) -> Result<OutboundAttempt, StorageError> {
+    let attempt: Option<(String, String, i64, String)> = connection
+        .query_row(
+            "SELECT draft_id, account_id, draft_revision, state
+             FROM outbound_attempts WHERE id=?1",
+            [input.attempt_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let Some((draft_id, account_id, draft_revision, state)) = attempt else {
+        return Err(StorageError::NotFound);
+    };
+    if state != "submitting" {
+        return Err(StorageError::Constraint);
+    }
+    let (next_state, send_blocked, provider_message_id, safe_error_code) = match &input.outcome {
+        OutboundAttemptOutcome::Accepted {
+            provider_message_id,
+        } => (
+            "accepted_pending",
+            false,
+            provider_message_id.as_deref(),
+            None,
+        ),
+        OutboundAttemptOutcome::Rejected { safe_error_code } => (
+            "rejected",
+            false,
+            None,
+            Some(outbound_failure_code_to_str(*safe_error_code)),
+        ),
+        OutboundAttemptOutcome::UnknownAfterSubmission => ("unknown_locked", true, None, None),
+    };
+    let changed = connection
+        .execute(
+            "UPDATE outbound_attempts
+             SET state=?2, send_blocked=?3, provider_message_id=?4,
+                 safe_error_code=?5, updated_at_ms=max(updated_at_ms, created_at_ms, ?6)
+             WHERE id=?1 AND state='submitting'",
+            params![
+                input.attempt_id.to_string(),
+                next_state,
+                send_blocked,
+                provider_message_id,
+                safe_error_code,
+                input.updated_at_ms,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    if changed != 1 {
+        return Err(StorageError::Constraint);
+    }
+    if matches!(&input.outcome, OutboundAttemptOutcome::Accepted { .. }) {
+        connection
+            .execute(
+                "DELETE FROM drafts WHERE id=?1 AND account_id=?2 AND revision=?3",
+                params![draft_id, account_id, draft_revision],
+            )
+            .map_err(|error| StorageError::from_sql(&error))?;
+    }
+    get_outbound_attempt(connection, input.attempt_id)?.ok_or(StorageError::Serialization)
+}
+
+fn reconcile_outbound_attempt(
+    connection: &Connection,
+    input: &ReconcileOutboundAttemptInput,
+) -> Result<OutboundAttempt, StorageError> {
+    let attempt =
+        get_outbound_attempt(connection, input.attempt_id)?.ok_or(StorageError::NotFound)?;
+    if attempt.state == OutboundAttemptState::Reconciled {
+        return Ok(attempt);
+    }
+    if !matches!(
+        attempt.state,
+        OutboundAttemptState::AcceptedPending | OutboundAttemptState::UnknownLocked
+    ) || input.mailbox.role != MailboxRole::Sent
+        || input.mailbox.key.account_id != attempt.account_id
+        || input.message.key.account_id != attempt.account_id
+        || input.message.key.provider_mailbox_id != input.mailbox.key.provider_mailbox_id
+        || normalized_message_id(input.message.mime.message_id.as_deref())
+            != normalized_message_id(Some(&attempt.message.message_id))
+    {
+        return Err(StorageError::Constraint);
+    }
+    upsert_remote_mailbox(connection, &input.mailbox, input.reconciled_at_ms)?;
+    let (_, _, message_id) = upsert_remote_message(
+        connection,
+        &input.message,
+        MessageDirection::Outgoing,
+        input.reconciled_at_ms,
+    )?;
+    let changed = connection
+        .execute(
+            "UPDATE outbound_attempts
+             SET state='reconciled', send_blocked=0, retry_authorized=0,
+                 provider_message_id=COALESCE(provider_message_id, ?2),
+                 reconciled_message_id=?3, safe_error_code=NULL,
+                 updated_at_ms=max(updated_at_ms, created_at_ms, ?4)
+             WHERE id=?1 AND state IN ('accepted_pending', 'unknown_locked')",
+            params![
+                input.attempt_id.to_string(),
+                input.message.key.provider_message_id,
+                message_id.to_string(),
+                input.reconciled_at_ms,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    if changed != 1 {
+        return Err(StorageError::Constraint);
+    }
+    connection
+        .execute(
+            "DELETE FROM drafts WHERE id=?1 AND account_id=?2 AND revision=?3",
+            params![
+                attempt.draft_id.to_string(),
+                attempt.account_id.to_string(),
+                i64::try_from(attempt.draft_revision).map_err(|_| StorageError::Serialization)?,
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    get_outbound_attempt(connection, input.attempt_id)?.ok_or(StorageError::Serialization)
+}
+
+fn normalized_message_id(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix('<').unwrap_or(value))
+        .map(|value| value.strip_suffix('>').unwrap_or(value))
+}
+
+#[derive(Debug)]
+struct OutboundAttemptRow {
+    id: String,
+    account_id: String,
+    draft_id: String,
+    draft_revision: i64,
+    reply_source_message_id: Option<String>,
+    provider_thread_id: Option<String>,
+    original_provider_message_id: Option<String>,
+    rfc_message_id: String,
+    date_rfc2822: String,
+    exact_mime: Vec<u8>,
+    envelope_from: String,
+    envelope_recipients_json: String,
+    sender_json: String,
+    recipients_json: String,
+    subject: String,
+    body_plain: String,
+    state: String,
+    provider_message_id: Option<String>,
+    reconciled_message_id: Option<String>,
+    safe_error_code: Option<String>,
+    sent_refresh_count: i64,
+    retry_authorized: bool,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+fn read_outbound_attempt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutboundAttemptRow> {
+    Ok(OutboundAttemptRow {
+        id: row.get(0)?,
+        account_id: row.get(1)?,
+        draft_id: row.get(2)?,
+        draft_revision: row.get(3)?,
+        reply_source_message_id: row.get(4)?,
+        provider_thread_id: row.get(5)?,
+        original_provider_message_id: row.get(6)?,
+        rfc_message_id: row.get(7)?,
+        date_rfc2822: row.get(8)?,
+        exact_mime: row.get(9)?,
+        envelope_from: row.get(10)?,
+        envelope_recipients_json: row.get(11)?,
+        sender_json: row.get(12)?,
+        recipients_json: row.get(13)?,
+        subject: row.get(14)?,
+        body_plain: row.get(15)?,
+        state: row.get(16)?,
+        provider_message_id: row.get(17)?,
+        reconciled_message_id: row.get(18)?,
+        safe_error_code: row.get(19)?,
+        sent_refresh_count: row.get(20)?,
+        retry_authorized: row.get(21)?,
+        created_at_ms: row.get(22)?,
+        updated_at_ms: row.get(23)?,
+    })
+}
+
+const OUTBOUND_ATTEMPT_COLUMNS: &str =
+    "id, account_id, draft_id, draft_revision, reply_source_message_id,
+     provider_thread_id, original_provider_message_id, rfc_message_id, date_rfc2822,
+     exact_mime, envelope_from, envelope_recipients_json, sender_json, recipients_json,
+     subject, body_plain, state, provider_message_id, reconciled_message_id,
+     safe_error_code, sent_refresh_count, retry_authorized, created_at_ms, updated_at_ms";
+
+fn get_outbound_attempt(
+    connection: &Connection,
+    attempt_id: OutboundAttemptId,
+) -> Result<Option<OutboundAttempt>, StorageError> {
+    connection
+        .query_row(
+            &format!("SELECT {OUTBOUND_ATTEMPT_COLUMNS} FROM outbound_attempts WHERE id=?1"),
+            [attempt_id.to_string()],
+            read_outbound_attempt_row,
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?
+        .map(outbound_attempt_from_row)
+        .transpose()
+}
+
+fn outbound_attempt_from_row(row: OutboundAttemptRow) -> Result<OutboundAttempt, StorageError> {
+    let envelope_recipients: Vec<String> = serde_json::from_str(&row.envelope_recipients_json)
+        .map_err(|_| StorageError::Serialization)?;
+    if envelope_recipients
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err(StorageError::Serialization);
+    }
+    let sender_value: serde_json::Value =
+        serde_json::from_str(&row.sender_json).map_err(|_| StorageError::Serialization)?;
+    let recipients: serde_json::Value =
+        serde_json::from_str(&row.recipients_json).map_err(|_| StorageError::Serialization)?;
+    let sender = decode_draft_address(&sender_value)?;
+    let addresses = |name: &str| decode_draft_addresses(recipients.get(name));
+    let rfc_message_id = row.rfc_message_id;
+    Ok(OutboundAttempt {
+        id: parse_id(&row.id)?,
+        draft_id: parse_id(&row.draft_id)?,
+        draft_revision: u64::try_from(row.draft_revision)
+            .map_err(|_| StorageError::Serialization)?,
+        account_id: parse_id(&row.account_id)?,
+        in_reply_to_message_id: row
+            .reply_source_message_id
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        provider_thread_id: row.provider_thread_id,
+        original_provider_message_id: row.original_provider_message_id,
+        date_rfc2822: row.date_rfc2822,
+        message: ComposedMessage::new(
+            row.exact_mime,
+            rfc_message_id,
+            DeliveryEnvelope {
+                from: row.envelope_from,
+                recipients: envelope_recipients,
+            },
+        ),
+        snapshot: OutboundAttemptSnapshot {
+            sender,
+            to: addresses("to")?,
+            cc: addresses("cc")?,
+            bcc: addresses("bcc")?,
+            subject: row.subject,
+            plain_body: row.body_plain,
+        },
+        state: outbound_attempt_state_from_str(&row.state)?,
+        provider_message_id: row.provider_message_id,
+        reconciled_message_id: row
+            .reconciled_message_id
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        safe_error_code: row
+            .safe_error_code
+            .as_deref()
+            .map(outbound_failure_code_from_str)
+            .transpose()?,
+        sent_refresh_count: u32::try_from(row.sent_refresh_count)
+            .map_err(|_| StorageError::Serialization)?,
+        retry_authorized: row.retry_authorized,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+    })
+}
+
+fn list_sent_projections(
+    connection: &Connection,
+    account_id: Option<AccountId>,
+) -> Result<Vec<SentProjection>, StorageError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id FROM outbound_attempts
+             WHERE state IN ('accepted_pending', 'reconciled', 'unknown_locked')
+               AND (?1 IS NULL OR account_id=?1)
+             ORDER BY updated_at_ms DESC, id DESC",
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let account = account_id.map(|id| id.to_string());
+    let ids = statement
+        .query_map([account], |row| row.get::<_, String>(0))
+        .map_err(|error| StorageError::from_sql(&error))?
+        .map(|row| {
+            row.map_err(|error| StorageError::from_sql(&error))
+                .and_then(|value| parse_id(&value))
+        })
+        .collect::<Result<Vec<OutboundAttemptId>, StorageError>>()?;
+    ids.into_iter()
+        .map(|id| {
+            get_outbound_attempt(connection, id)?
+                .map(|attempt| SentProjection { attempt })
+                .ok_or(StorageError::Serialization)
+        })
+        .collect()
+}
+
+fn record_sent_refresh(
+    connection: &Connection,
+    input: RecordSentRefreshInput,
+) -> Result<u32, StorageError> {
+    connection
+        .execute(
+            "UPDATE outbound_attempts
+             SET sent_refresh_count=sent_refresh_count + 1,
+                 updated_at_ms=max(updated_at_ms, created_at_ms, ?2)
+             WHERE account_id=?1 AND state IN ('accepted_pending', 'unknown_locked')",
+            params![input.account_id.to_string(), input.refreshed_at_ms],
+        )
+        .map_err(|error| StorageError::from_sql(&error))
+        .and_then(|count| u32::try_from(count).map_err(|_| StorageError::Serialization))
+}
+
+fn authorize_outbound_retry(
+    connection: &Connection,
+    input: AuthorizeOutboundRetryInput,
+) -> Result<bool, StorageError> {
+    connection
+        .execute(
+            "UPDATE outbound_attempts
+             SET retry_authorized=1, send_blocked=0,
+                 updated_at_ms=max(updated_at_ms, created_at_ms, ?2)
+             WHERE id=?1 AND state='unknown_locked' AND send_blocked=1
+               AND retry_authorized=0 AND sent_refresh_count>=1",
+            params![input.attempt_id.to_string(), input.authorized_at_ms],
+        )
+        .map(|changed| changed > 0)
+        .map_err(|error| StorageError::from_sql(&error))
+}
+
+fn recover_submitting_outbound_attempts(
+    connection: &Connection,
+    recovered_at_ms: i64,
+) -> Result<u32, StorageError> {
+    connection
+        .execute(
+            "UPDATE outbound_attempts
+             SET state='unknown_locked', send_blocked=1, retry_authorized=0,
+                 updated_at_ms=max(updated_at_ms, created_at_ms, ?1)
+             WHERE state='submitting'",
+            [recovered_at_ms],
+        )
+        .map_err(|error| StorageError::from_sql(&error))
+        .and_then(|count| u32::try_from(count).map_err(|_| StorageError::Serialization))
+}
+
+fn encode_draft_address(address: &DraftAddress) -> serde_json::Value {
+    serde_json::json!({
+        "displayName": address.display_name,
+        "address": address.address,
+    })
+}
+
+fn decode_draft_address(value: &serde_json::Value) -> Result<DraftAddress, StorageError> {
+    let object = value.as_object().ok_or(StorageError::Serialization)?;
+    let display_name = object
+        .get("displayName")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or(StorageError::Serialization)
+        })
+        .transpose()?;
+    let address = object
+        .get("address")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(StorageError::Serialization)?
+        .to_owned();
+    Ok(DraftAddress {
+        display_name,
+        address,
+    })
+}
+
+fn outbound_attempt_state_from_str(value: &str) -> Result<OutboundAttemptState, StorageError> {
+    match value {
+        "submitting" => Ok(OutboundAttemptState::Submitting),
+        "accepted_pending" => Ok(OutboundAttemptState::AcceptedPending),
+        "reconciled" => Ok(OutboundAttemptState::Reconciled),
+        "rejected" => Ok(OutboundAttemptState::Rejected),
+        "unknown_locked" => Ok(OutboundAttemptState::UnknownLocked),
+        _ => Err(StorageError::Serialization),
+    }
+}
+
+const fn outbound_failure_code_to_str(value: OutboundFailureCode) -> &'static str {
+    match value {
+        OutboundFailureCode::RecipientRejected => "recipient_rejected",
+        OutboundFailureCode::AuthenticationRequired => "authentication_required",
+        OutboundFailureCode::ProviderUnavailable => "provider_unavailable",
+        OutboundFailureCode::InvalidDraft => "invalid_draft",
+        OutboundFailureCode::Internal => "internal",
+    }
+}
+
+fn outbound_failure_code_from_str(value: &str) -> Result<OutboundFailureCode, StorageError> {
+    match value {
+        "recipient_rejected" => Ok(OutboundFailureCode::RecipientRejected),
+        "authentication_required" => Ok(OutboundFailureCode::AuthenticationRequired),
+        "provider_unavailable" => Ok(OutboundFailureCode::ProviderUnavailable),
+        "invalid_draft" => Ok(OutboundFailureCode::InvalidDraft),
+        "internal" => Ok(OutboundFailureCode::Internal),
+        _ => Err(StorageError::Serialization),
+    }
+}
+
 fn schedule_sync_operation(
     connection: &Connection,
     input: &ScheduleSyncInput,
@@ -2725,8 +3398,12 @@ fn commit_sync_batch(
                 if message.key.account_id != input.cursor_key.account_id {
                     return Err(StorageError::Constraint);
                 }
-                let (inserted, acknowledged) =
-                    upsert_remote_message(connection, message, committed_at_ms)?;
+                let (inserted, acknowledged, _) = upsert_remote_message(
+                    connection,
+                    message,
+                    MessageDirection::Incoming,
+                    committed_at_ms,
+                )?;
                 if inserted {
                     result.inserted_messages += 1;
                 } else {
@@ -2865,8 +3542,9 @@ fn resolve_remote_message(
 fn upsert_remote_message(
     connection: &Connection,
     message: &RemoteMessage,
+    direction: MessageDirection,
     updated_at_ms: i64,
-) -> Result<(bool, bool), StorageError> {
+) -> Result<(bool, bool, MessageId), StorageError> {
     let (message_id, mailbox_id) = resolve_remote_message(connection, &message.key, updated_at_ms)?;
     let existing: Option<(i64, i64)> = connection
         .query_row(
@@ -2908,7 +3586,7 @@ fn upsert_remote_message(
                 body_plain, body_html, remote_is_read, is_read, direction, sent_at_ms,
                 received_at_ms, parser_version, sanitizer_version, created_at_ms, updated_at_ms
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                       ?13, ?14, ?15, 'incoming', ?16, ?17, 1, 1, ?18, ?19)
+                       ?13, ?14, ?15, ?16, ?17, ?18, 1, 1, ?19, ?20)
              ON CONFLICT(id) DO UPDATE SET
                 mailbox_id=excluded.mailbox_id, provider_revision=excluded.provider_revision,
                 thread_id=excluded.thread_id, rfc_message_id=excluded.rfc_message_id,
@@ -2937,6 +3615,10 @@ fn upsert_remote_message(
                 message.mime.body.html,
                 message.read,
                 effective_read,
+                match direction {
+                    MessageDirection::Incoming => "incoming",
+                    MessageDirection::Outgoing => "outgoing",
+                },
                 message.sent_at_ms,
                 message.received_at_ms,
                 created_at_ms,
@@ -2946,7 +3628,7 @@ fn upsert_remote_message(
         .map_err(|error| StorageError::from_sql(&error))?;
     replace_remote_message_children(connection, message_id, &message.key, message)?;
     refresh_message_fts(connection, message_id)?;
-    Ok((inserted, false))
+    Ok((inserted, false, message_id))
 }
 
 fn replace_remote_message_children(

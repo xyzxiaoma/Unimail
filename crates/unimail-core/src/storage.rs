@@ -7,13 +7,15 @@ use ts_rs::TS;
 
 use crate::{
     Account, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult, AccountCreateInput,
-    AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, DeleteAccountResult, DesiredReadMutation, Draft, DraftId,
-    DraftSaveInput, DraftSendReviewKey, DraftSummary, InboxListInput, LeaseRecoveryResult, Mailbox,
-    MailboxUpsertInput, MessageDetail, MessageId, MessageListInput, MessagePage,
-    MessageReadStateInput, MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput,
-    OfflineDraftReviewResult, OperationId, Provider, ScheduleSyncInput, SendConfirmationRequired,
-    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
+    AccountId, AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput, DeleteAccountResult,
+    DesiredReadMutation, Draft, DraftId, DraftSaveInput, DraftSendReviewKey, DraftSummary,
+    InboxListInput, LeaseRecoveryResult, Mailbox, MailboxUpsertInput, MessageDetail, MessageId,
+    MessageListInput, MessagePage, MessageReadStateInput, MessageUpsertInput, MessageUpsertResult,
+    OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, OutboundAttempt,
+    OutboundAttemptId, PrepareOutboundAttemptInput, Provider, ReconcileOutboundAttemptInput,
+    RecordSentRefreshInput, ReplySource, ScheduleSyncInput, SendConfirmationRequired,
+    SentProjection, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
     SyncOperationSummary, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
@@ -333,6 +335,13 @@ pub trait StorageRepository: Send + Sync {
     /// Returns a repository category when storage cannot be queried.
     fn get_message(&self, message_id: MessageId) -> RepositoryResult<Option<MessageDetail>>;
 
+    /// Loads backend-only provider/thread/address fields required to create a reply draft.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried or normalized safely.
+    fn get_reply_source(&self, message_id: MessageId) -> RepositoryResult<Option<ReplySource>>;
+
     /// Updates local message read state.
     ///
     /// # Errors
@@ -400,12 +409,12 @@ pub trait StorageRepository: Send + Sync {
     /// Returns a repository category when storage cannot be queried.
     fn get_draft(&self, draft_id: DraftId) -> RepositoryResult<Option<Draft>>;
 
-    /// Lists compact drafts for one account.
+    /// Lists compact drafts, optionally scoped to one account.
     ///
     /// # Errors
     ///
     /// Returns a repository category when storage cannot be queried.
-    fn list_drafts(&self, account_id: AccountId) -> RepositoryResult<Vec<DraftSummary>>;
+    fn list_drafts(&self, account_id: Option<AccountId>) -> RepositoryResult<Vec<DraftSummary>>;
 
     /// Idempotently deletes one draft.
     ///
@@ -440,6 +449,80 @@ pub trait StorageRepository: Send + Sync {
     ///
     /// Returns a repository category when storage cannot be updated.
     fn consume_draft_send_review(&self, key: DraftSendReviewKey) -> RepositoryResult<bool>;
+
+    /// Atomically claims one exact draft revision and persists exact composed bytes before dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a revision or constraint failure when the draft cannot be claimed safely.
+    fn prepare_outbound_attempt(
+        &self,
+        input: PrepareOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt>;
+
+    /// Applies one terminal provider result to the claimed attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the guarded transition cannot be committed.
+    fn complete_outbound_attempt(
+        &self,
+        input: CompleteOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt>;
+
+    /// Gets one durable outbound attempt by local identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn get_outbound_attempt(
+        &self,
+        attempt_id: OutboundAttemptId,
+    ) -> RepositoryResult<Option<OutboundAttempt>>;
+
+    /// Lists fixed Sent projections, optionally scoped to one account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_sent_projections(
+        &self,
+        account_id: Option<AccountId>,
+    ) -> RepositoryResult<Vec<SentProjection>>;
+
+    /// Records one explicit user Sent refresh for pending/ambiguous attempts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the durable guard cannot be advanced.
+    fn record_sent_refresh(&self, input: RecordSentRefreshInput) -> RepositoryResult<u32>;
+
+    /// Unlocks one future retry only after an explicit Sent refresh and risk confirmation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the guarded transition cannot be written.
+    fn authorize_outbound_retry(
+        &self,
+        input: AuthorizeOutboundRetryInput,
+    ) -> RepositoryResult<bool>;
+
+    /// Atomically upserts one provider-observed Sent message and marks its attempt reconciled.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when identities do not match or the transaction fails.
+    fn reconcile_outbound_attempt(
+        &self,
+        input: ReconcileOutboundAttemptInput,
+    ) -> RepositoryResult<OutboundAttempt>;
+
+    /// Converts crash-left submitting attempts into conservative ambiguous locks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when startup recovery cannot be committed.
+    fn recover_submitting_outbound_attempts(&self, recovered_at_ms: i64) -> RepositoryResult<u32>;
 
     /// Reads an opaque provider cursor for an account scope.
     ///

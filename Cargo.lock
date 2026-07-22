@@ -5176,12 +5176,14 @@ dependencies = [
  "subtle",
  "tauri",
  "tauri-build",
+ "time",
  "tokio",
  "unimail-application",
  "unimail-core",
  "unimail-providers",
  "unimail-storage",
  "url",
+ "uuid",
 ]
 
 [[package]]

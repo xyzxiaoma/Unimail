@@ -208,10 +208,12 @@ mod tests {
     use unimail_core::{
         AcceptedSend, AccountAuthenticator, AccountId, AuthenticatedAccount,
         AuthorizationCodeLoginRequest, CompleteLoginRequest, ComposedMessage, CredentialRef,
-        DeliveryEnvelope, IncrementalSyncRequest, InitialSyncLimit, MailProvider, MimeBody,
-        NormalizedMimeMessage, Provider, ProviderError, ProviderErrorKind, ReconciliationKey,
-        RejectedSend, RemoteChange, RemoteMessage, RemoteMessageKey, SendOutcome, SendRequest,
-        SensitiveString, SetReadRequest, StartLoginRequest, UnknownSend,
+        DeliveryEnvelope, IncrementalSyncRequest, InitialSyncLimit, MailProvider, MailboxRole,
+        MimeBody, NormalizedMimeMessage, Provider, ProviderError, ProviderErrorKind,
+        ReconciliationKey, RejectedSend, RemoteChange, RemoteMailbox, RemoteMailboxKey,
+        RemoteMessage, RemoteMessageKey, SendOutcome, SendRequest, SensitiveString,
+        SentReconciliationRequest, SentReconciliationResult, SetReadRequest, StartLoginRequest,
+        UnknownSend,
     };
 
     use super::{
@@ -271,6 +273,39 @@ mod tests {
             limit: InitialSyncLimit::new(limit).expect("fixture limit should be valid"),
             continuation: None,
         }
+    }
+
+    fn verify_fake_sent_reconciliation(
+        provider: &FakeMailProvider,
+        account_id: AccountId,
+        cancellation: &FakeCancellation,
+    ) {
+        provider
+            .add_mailbox(RemoteMailbox {
+                key: RemoteMailboxKey {
+                    account_id,
+                    provider_mailbox_id: "sent".to_owned(),
+                },
+                role: MailboxRole::Sent,
+                display_name: "已发送".to_owned(),
+            })
+            .expect("seed Sent mailbox");
+        let mut sent_message = message(account_id, "sent-provider-id", true);
+        sent_message.key.provider_mailbox_id = "sent".to_owned();
+        sent_message.mime.message_id = Some("<stable@example.com>".to_owned());
+        provider
+            .push_change(RemoteChange::Upsert(Box::new(sent_message)))
+            .expect("seed Sent message");
+        let found = block_on(provider.find_sent(
+            SentReconciliationRequest {
+                account_id,
+                provider_message_id: Some("sent-provider-id".to_owned()),
+                reconciliation_key: ReconciliationKey::new("stable@example.com"),
+            },
+            cancellation,
+        ))
+        .expect("read-only Sent lookup");
+        assert!(matches!(found, SentReconciliationResult::Found { .. }));
     }
 
     #[test]
@@ -339,6 +374,8 @@ mod tests {
             .expect("send conformance should pass");
         assert!(is_ambiguous_send(&outcome));
 
+        verify_fake_sent_reconciliation(&provider, account_id, &cancellation);
+
         assert_eq!(
             provider
                 .calls()
@@ -354,6 +391,15 @@ mod tests {
                 .expect("safe calls")
                 .iter()
                 .filter(|call| matches!(call, FakeCall::Send { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            provider
+                .calls()
+                .expect("safe calls")
+                .iter()
+                .filter(|call| matches!(call, FakeCall::ReconcileSent))
                 .count(),
             1
         );

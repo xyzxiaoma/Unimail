@@ -7,7 +7,8 @@ use unimail_core::{
     MailboxRole, MimeCodec, MimeLimits, NormalizedMimeMessage, Provider, ProviderError,
     ProviderErrorKind, ProviderFuture, ProviderResult, ProviderRevision, ReadStateAck,
     ReconciliationKey, RemoteChange, RemoteMailbox, RemoteMailboxKey, RemoteMessage,
-    RemoteMessageKey, RetryHint, SendOutcome, SendRequest, SetReadRequest, SyncPage, SyncPageState,
+    RemoteMessageKey, RetryHint, SendOutcome, SendRequest, SentReconciliationRequest,
+    SentReconciliationResult, SetReadRequest, SyncPage, SyncPageState,
 };
 
 use crate::SharedMimeCodec;
@@ -286,6 +287,71 @@ impl ImapProvider {
         };
         confirm_sent(outcome, selected.uid_validity, uid, message_id)
     }
+
+    async fn find_sent_message(
+        &self,
+        request: &SentReconciliationRequest,
+        cancellation: &dyn Cancellation,
+    ) -> ProviderResult<SentReconciliationResult> {
+        let registration = self
+            .registry
+            .get(request.account_id, self.preset.provider)?;
+        let credential = self
+            .credentials
+            .load(&registration.credential_ref, self.preset.provider)?;
+        let authorization_code = credential.authorization_code();
+        let mut session = connect(
+            self.preset,
+            credential.account_address(),
+            &authorization_code,
+            cancellation,
+        )
+        .await?;
+        let mailboxes = session
+            .discover_mailboxes(self.preset, cancellation)
+            .await?;
+        let Some(sent_mailbox) = mailboxes.sent else {
+            return Ok(SentReconciliationResult::Pending);
+        };
+        let selected = session.select_mailbox(&sent_mailbox, cancellation).await?;
+        let uids = session
+            .search_message_id(request.reconciliation_key.expose(), cancellation)
+            .await?;
+        for uid in uids.into_iter().rev() {
+            let fetched = session.fetch_uids(&uid.to_string(), cancellation).await?;
+            let Some(fetched) = fetched.into_iter().find(|message| message.uid == uid) else {
+                continue;
+            };
+            let mut message = self.remote_message(
+                request.account_id,
+                &sent_mailbox,
+                selected.uid_validity,
+                &fetched,
+            )?;
+            if request
+                .provider_message_id
+                .as_deref()
+                .is_some_and(|id| id != message.key.provider_message_id)
+                || normalized_message_id(message.mime.message_id.as_deref())
+                    != normalized_message_id(Some(request.reconciliation_key.expose()))
+            {
+                continue;
+            }
+            message.sent_at_ms = Some(message.received_at_ms);
+            return Ok(SentReconciliationResult::Found {
+                mailbox: RemoteMailbox {
+                    key: RemoteMailboxKey {
+                        account_id: request.account_id,
+                        provider_mailbox_id: sent_mailbox,
+                    },
+                    role: MailboxRole::Sent,
+                    display_name: "已发送".to_owned(),
+                },
+                message: Box::new(message),
+            });
+        }
+        Ok(SentReconciliationResult::Pending)
+    }
 }
 
 impl MailProvider for ImapProvider {
@@ -460,6 +526,22 @@ impl MailProvider for ImapProvider {
                 .await)
         })
     }
+
+    fn find_sent<'a>(
+        &'a self,
+        request: SentReconciliationRequest,
+        cancellation: &'a dyn Cancellation,
+    ) -> ProviderFuture<'a, SentReconciliationResult> {
+        Box::pin(async move { self.find_sent_message(&request, cancellation).await })
+    }
+}
+
+fn normalized_message_id(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix('<').unwrap_or(value))
+        .map(|value| value.strip_suffix('>').unwrap_or(value))
 }
 
 fn ensure_inbox(mailbox_id: &str) -> ProviderResult<()> {

@@ -17,7 +17,8 @@ use unimail_core::{
     OpaqueProviderCursor, PageContinuation, Provider, ProviderError, ProviderErrorKind,
     ProviderFuture, ProviderResult, ProviderRevision, ReadStateAck, ReconciliationKey,
     RemoteChange, RemoteMailbox, RemoteMessage, RemoteMessageKey, SendOutcome, SendRequest,
-    SensitiveString, SetReadRequest, StartLoginRequest, SyncPage, SyncPageState,
+    SensitiveString, SentReconciliationRequest, SentReconciliationResult, SetReadRequest,
+    StartLoginRequest, SyncPage, SyncPageState,
 };
 
 /// Operations that can receive one-shot injected failures.
@@ -29,6 +30,7 @@ pub enum FakeOperation {
     FetchAttachment,
     SetRead,
     Send,
+    ReconcileSent,
     StartLogin,
     CompleteLogin,
     AuthorizationCodeLogin,
@@ -56,6 +58,7 @@ pub enum FakeCall {
         recipient_count: usize,
         provider_thread_present: bool,
     },
+    ReconcileSent,
     StartLogin {
         provider: Provider,
     },
@@ -473,6 +476,60 @@ impl MailProvider for FakeMailProvider {
             }))
         })
     }
+
+    fn find_sent<'a>(
+        &'a self,
+        request: SentReconciliationRequest,
+        cancellation: &'a dyn Cancellation,
+    ) -> ProviderFuture<'a, SentReconciliationResult> {
+        Box::pin(async move {
+            ensure_not_cancelled(cancellation)?;
+            let mut state = self.lock_state()?;
+            state.calls.push(FakeCall::ReconcileSent);
+            take_failure(&mut state, FakeOperation::ReconcileSent)?;
+            let sent_mailbox = state
+                .mailboxes
+                .iter()
+                .find(|mailbox| {
+                    mailbox.key.account_id == request.account_id
+                        && mailbox.role == unimail_core::MailboxRole::Sent
+                })
+                .cloned();
+            let Some(mailbox) = sent_mailbox else {
+                return Ok(SentReconciliationResult::Pending);
+            };
+            let message = state
+                .messages
+                .values()
+                .find(|message| {
+                    message.key.account_id == request.account_id
+                        && message.key.provider_mailbox_id == mailbox.key.provider_mailbox_id
+                        && request
+                            .provider_message_id
+                            .as_deref()
+                            .is_none_or(|id| id == message.key.provider_message_id)
+                        && normalize_message_id(message.mime.message_id.as_deref())
+                            == normalize_message_id(Some(request.reconciliation_key.expose()))
+                })
+                .cloned();
+            Ok(
+                message.map_or(SentReconciliationResult::Pending, |message| {
+                    SentReconciliationResult::Found {
+                        mailbox,
+                        message: Box::new(message),
+                    }
+                }),
+            )
+        })
+    }
+}
+
+fn normalize_message_id(value: Option<&str>) -> Option<&str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix('<').unwrap_or(value))
+        .map(|value| value.strip_suffix('>').unwrap_or(value))
 }
 
 /// Stateful authenticator fake that never stores callback URLs or authorization codes.

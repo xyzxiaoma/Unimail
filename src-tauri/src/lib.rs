@@ -4,18 +4,24 @@ mod onboarding;
 mod remote_image;
 mod runtime;
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
 use tauri::Manager;
 use unimail_application::{
-    BoundedSyncPermitPool, Clock, RetryPolicy, RunOutcome, SyncCoordinator, SyncPermitPool,
-    SyncProvider, SyncStore,
+    BoundedSyncPermitPool, Clock, ComposeStore, ExplicitSendError, ExplicitSendProvider,
+    ExplicitSendRequest, ExplicitSendResult, ExplicitSendService, RetryPolicy, RunOutcome,
+    SentReconciliationError, SentReconciliationProvider, SentReconciliationService,
+    SyncCoordinator, SyncPermitPool, SyncProvider, SyncStore,
 };
 use unimail_core::{
-    AccountAuthState, ApplicationInfo, AssignReadStateResultV1, ConnectedAccountSummary,
-    CredentialStore, InboxPageRequestV1, InboxPageV1, MessageDetailV1, MessageId,
-    MessageReadStateInput, OAuthOnboardingCommandError, OAuthOnboardingErrorCode,
-    OAuthOnboardingStatus, Provider, RemoteImageResultV1, RepositoryError, RepositoryResult,
+    AccountAuthState, AccountId, ApplicationInfo, AssignReadStateResultV1,
+    AuthorizeOutboundRetryInput, ComposeCommandError, ComposeCommandErrorCode,
+    ConnectedAccountSummary, CredentialStore, DraftId, DraftSaveInput, DraftSummaryV1, DraftV1,
+    ExplicitSendRequestV1, ExplicitSendResultV1, ExplicitSendStateV1, InboxPageRequestV1,
+    InboxPageV1, MessageDetailV1, MessageId, MessageReadStateInput, OAuthOnboardingCommandError,
+    OAuthOnboardingErrorCode, OAuthOnboardingStatus, OutboundAttemptId, Provider,
+    ProviderErrorKind, RemoteImageResultV1, RepositoryError, RepositoryResult,
+    RetryAuthorizationResultV1, SaveDraftRequestV1, SentItemV1, SentRefreshResultV1,
     StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus, SyncState,
 };
 use unimail_providers::{
@@ -30,7 +36,9 @@ use crate::{
     authorization_onboarding::AuthorizationCodeManager,
     oauth::{DesktopCancellation, RedirectHost, SystemBrowserOpener},
     onboarding::{OAuthSessionConfig, OAuthSessionManager},
-    runtime::{RuntimeRandom, SystemClock, TokioSyncStore},
+    runtime::{
+        DesktopConnectivity, RuntimeOutboundIdentity, RuntimeRandom, SystemClock, TokioSyncStore,
+    },
 };
 
 const DATABASE_FILE_NAME: &str = "unimail.db";
@@ -48,7 +56,12 @@ impl StorageState {
             .and_then(|data_dir| {
                 std::fs::create_dir_all(&data_dir)
                     .map_err(|_| RepositoryError::DatabaseOpenFailed)?;
-                SqlCipherRepository::initialize(data_dir.join(DATABASE_FILE_NAME), credentials)
+                let repository = SqlCipherRepository::initialize(
+                    data_dir.join(DATABASE_FILE_NAME),
+                    credentials,
+                )?;
+                repository.recover_submitting_outbound_attempts(SystemClock.now_ms())?;
+                Ok(repository)
             })
             .map(Arc::new);
 
@@ -73,13 +86,27 @@ impl StorageState {
 }
 
 struct OAuthState {
-    gmail: Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode>,
-    outlook: Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode>,
+    gmail: Result<OAuthProviderRuntime, OAuthOnboardingErrorCode>,
+    outlook: Result<OAuthProviderRuntime, OAuthOnboardingErrorCode>,
 }
 
 struct AuthorizationCodeState {
-    qq: Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode>,
-    netease: Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode>,
+    qq: Result<AuthorizationProviderRuntime, OAuthOnboardingErrorCode>,
+    netease: Result<AuthorizationProviderRuntime, OAuthOnboardingErrorCode>,
+}
+
+#[derive(Clone)]
+struct OAuthProviderRuntime {
+    manager: Arc<OAuthSessionManager>,
+    provider: Arc<dyn ExplicitSendProvider>,
+    reconciliation_provider: Arc<dyn SentReconciliationProvider>,
+}
+
+#[derive(Clone)]
+struct AuthorizationProviderRuntime {
+    manager: Arc<AuthorizationCodeManager>,
+    provider: Arc<dyn ExplicitSendProvider>,
+    reconciliation_provider: Arc<dyn SentReconciliationProvider>,
 }
 
 impl AuthorizationCodeState {
@@ -112,7 +139,7 @@ impl AuthorizationCodeState {
         registry: Arc<ImapAccountRegistry>,
         permits: Arc<dyn SyncPermitPool>,
         preset: &'static unimail_providers::imap::ImapSmtpPreset,
-    ) -> Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode> {
+    ) -> Result<AuthorizationProviderRuntime, OAuthOnboardingErrorCode> {
         let repository = storage
             .repository
             .as_ref()
@@ -128,8 +155,10 @@ impl AuthorizationCodeState {
             .map_err(|_| OAuthOnboardingErrorCode::Internal)?,
         );
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
-        let provider: Arc<dyn SyncProvider> = provider;
-        let coordinator = build_coordinator(provider, repository_port, permits)?;
+        let sync_provider: Arc<dyn SyncProvider> = provider.clone();
+        let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let coordinator = build_coordinator(sync_provider, repository_port, permits)?;
         for account in repository
             .list_accounts()
             .map_err(|_| OAuthOnboardingErrorCode::StorageUnavailable)?
@@ -151,14 +180,18 @@ impl AuthorizationCodeState {
             preset.provider,
             Arc::clone(&registry),
         );
-        Ok(Arc::new(AuthorizationCodeManager::new(
-            preset.provider,
-            authenticator,
-            repository.clone(),
-            credentials,
-            registry,
-            coordinator,
-        )))
+        Ok(AuthorizationProviderRuntime {
+            manager: Arc::new(AuthorizationCodeManager::new(
+                preset.provider,
+                authenticator,
+                repository.clone(),
+                credentials,
+                registry,
+                coordinator,
+            )),
+            provider: send_provider,
+            reconciliation_provider,
+        })
     }
 
     fn manager(
@@ -166,8 +199,54 @@ impl AuthorizationCodeState {
         provider: Provider,
     ) -> Result<Arc<AuthorizationCodeManager>, OAuthOnboardingErrorCode> {
         match provider {
-            Provider::Qq => self.qq.clone(),
-            Provider::Netease => self.netease.clone(),
+            Provider::Qq => self
+                .qq
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.manager))
+                .map_err(|code| *code),
+            Provider::Netease => self
+                .netease
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.manager))
+                .map_err(|code| *code),
+            Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn send_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn ExplicitSendProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Qq => self
+                .qq
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.provider))
+                .map_err(|code| *code),
+            Provider::Netease => self
+                .netease
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.provider))
+                .map_err(|code| *code),
+            Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn reconciliation_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn SentReconciliationProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Qq => self
+                .qq
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
+            Provider::Netease => self
+                .netease
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
             Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
     }
@@ -216,7 +295,7 @@ impl OAuthState {
         storage: &StorageState,
         credentials: Arc<dyn CredentialStore>,
         permits: Arc<dyn SyncPermitPool>,
-    ) -> Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode> {
+    ) -> Result<OAuthProviderRuntime, OAuthOnboardingErrorCode> {
         let repository = storage
             .repository
             .as_ref()
@@ -242,8 +321,10 @@ impl OAuthState {
             .map_err(|_| OAuthOnboardingErrorCode::Internal)?,
         );
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
-        let provider: Arc<dyn SyncProvider> = provider;
-        let coordinator = build_coordinator(provider, Arc::clone(&repository_port), permits)?;
+        let sync_provider: Arc<dyn SyncProvider> = provider.clone();
+        let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let coordinator = build_coordinator(sync_provider, Arc::clone(&repository_port), permits)?;
         let manager = Arc::new(OAuthSessionManager::new(
             OAuthSessionConfig {
                 provider: Provider::Gmail,
@@ -264,14 +345,18 @@ impl OAuthState {
             .restore_registry(&accounts)
             .map_err(|()| OAuthOnboardingErrorCode::Internal)?;
         spawn_startup_drain(coordinator, repository.clone(), Provider::Gmail, registry);
-        Ok(manager)
+        Ok(OAuthProviderRuntime {
+            manager,
+            provider: send_provider,
+            reconciliation_provider,
+        })
     }
 
     fn build_outlook(
         storage: &StorageState,
         credentials: Arc<dyn CredentialStore>,
         permits: Arc<dyn SyncPermitPool>,
-    ) -> Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode> {
+    ) -> Result<OAuthProviderRuntime, OAuthOnboardingErrorCode> {
         let repository = storage
             .repository
             .as_ref()
@@ -293,8 +378,10 @@ impl OAuthState {
             .map_err(|_| OAuthOnboardingErrorCode::Internal)?,
         );
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
-        let provider: Arc<dyn SyncProvider> = provider;
-        let coordinator = build_coordinator(provider, Arc::clone(&repository_port), permits)?;
+        let sync_provider: Arc<dyn SyncProvider> = provider.clone();
+        let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let coordinator = build_coordinator(sync_provider, Arc::clone(&repository_port), permits)?;
         let manager = Arc::new(OAuthSessionManager::new(
             OAuthSessionConfig {
                 provider: Provider::Outlook,
@@ -315,7 +402,11 @@ impl OAuthState {
             .restore_registry(&accounts)
             .map_err(|()| OAuthOnboardingErrorCode::Internal)?;
         spawn_startup_drain(coordinator, repository.clone(), Provider::Outlook, registry);
-        Ok(manager)
+        Ok(OAuthProviderRuntime {
+            manager,
+            provider: send_provider,
+            reconciliation_provider,
+        })
     }
 
     fn manager(
@@ -323,8 +414,54 @@ impl OAuthState {
         provider: Provider,
     ) -> Result<Arc<OAuthSessionManager>, OAuthOnboardingErrorCode> {
         match provider {
-            Provider::Gmail => self.gmail.clone(),
-            Provider::Outlook => self.outlook.clone(),
+            Provider::Gmail => self
+                .gmail
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.manager))
+                .map_err(|code| *code),
+            Provider::Outlook => self
+                .outlook
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.manager))
+                .map_err(|code| *code),
+            Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn send_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn ExplicitSendProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Gmail => self
+                .gmail
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.provider))
+                .map_err(|code| *code),
+            Provider::Outlook => self
+                .outlook
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.provider))
+                .map_err(|code| *code),
+            Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn reconciliation_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn SentReconciliationProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Gmail => self
+                .gmail
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
+            Provider::Outlook => self
+                .outlook
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
             Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
     }
@@ -514,6 +651,143 @@ fn map_storage_status(
     result.map_err(StorageCommandError::from)
 }
 
+fn map_compose_storage_error(error: RepositoryError) -> ComposeCommandError {
+    let code = match error {
+        RepositoryError::NotFound => ComposeCommandErrorCode::NotFound,
+        RepositoryError::RevisionConflict => ComposeCommandErrorCode::RevisionConflict,
+        RepositoryError::ConstraintViolation | RepositoryError::InvalidData => {
+            ComposeCommandErrorCode::InvalidData
+        }
+        RepositoryError::CredentialStoreUnavailable
+        | RepositoryError::DatabaseKeyUnavailable
+        | RepositoryError::DatabaseKeyInvalid
+        | RepositoryError::DatabaseOpenFailed
+        | RepositoryError::CipherUnavailable
+        | RepositoryError::Fts5Unavailable
+        | RepositoryError::MigrationFailed
+        | RepositoryError::StorageBusy
+        | RepositoryError::CleanupPending => ComposeCommandErrorCode::StorageUnavailable,
+        RepositoryError::Internal => ComposeCommandErrorCode::Internal,
+    };
+    ComposeCommandError::from_code(code)
+}
+
+fn map_explicit_send_error(error: ExplicitSendError) -> ComposeCommandError {
+    let code = match error {
+        ExplicitSendError::Storage(error) => return map_compose_storage_error(error),
+        ExplicitSendError::DraftNotFound => ComposeCommandErrorCode::NotFound,
+        ExplicitSendError::AccountUnavailable => ComposeCommandErrorCode::AccountUnavailable,
+        ExplicitSendError::InvalidDraft => ComposeCommandErrorCode::InvalidData,
+        ExplicitSendError::EmptySubjectConfirmationRequired => {
+            ComposeCommandErrorCode::EmptySubjectConfirmationRequired
+        }
+        ExplicitSendError::OfflineReviewConfirmationRequired => {
+            ComposeCommandErrorCode::OfflineReviewConfirmationRequired
+        }
+        ExplicitSendError::SendLocked => ComposeCommandErrorCode::SendLocked,
+    };
+    ComposeCommandError::from_code(code)
+}
+
+fn send_provider_for(
+    provider: Provider,
+    oauth_state: &OAuthState,
+    authorization_state: &AuthorizationCodeState,
+) -> Result<Arc<dyn ExplicitSendProvider>, ComposeCommandError> {
+    oauth_state
+        .send_provider(provider)
+        .or_else(|_| authorization_state.send_provider(provider))
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable))
+}
+
+fn explicit_send_service(
+    repository: Arc<SqlCipherRepository>,
+    provider: Arc<dyn ExplicitSendProvider>,
+) -> ExplicitSendService {
+    let repository_port: Arc<dyn StorageRepository> = repository;
+    let store: Arc<dyn ComposeStore> = Arc::new(TokioSyncStore::new(repository_port));
+    ExplicitSendService::new(
+        store,
+        provider,
+        Arc::new(SharedMimeCodec::new()),
+        Arc::new(SystemClock),
+        Arc::new(RuntimeOutboundIdentity),
+    )
+}
+
+fn sent_reconciliation_provider_for(
+    provider: Provider,
+    oauth_state: &OAuthState,
+    authorization_state: &AuthorizationCodeState,
+) -> Result<Arc<dyn SentReconciliationProvider>, ComposeCommandError> {
+    oauth_state
+        .reconciliation_provider(provider)
+        .or_else(|_| authorization_state.reconciliation_provider(provider))
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable))
+}
+
+fn sent_reconciliation_service(
+    repository: Arc<SqlCipherRepository>,
+    provider: Arc<dyn SentReconciliationProvider>,
+) -> SentReconciliationService {
+    let repository_port: Arc<dyn StorageRepository> = repository;
+    let store: Arc<dyn ComposeStore> = Arc::new(TokioSyncStore::new(repository_port));
+    SentReconciliationService::new(store, provider, Arc::new(SystemClock))
+}
+
+fn map_sent_reconciliation_error(error: SentReconciliationError) -> ComposeCommandError {
+    match error {
+        SentReconciliationError::AccountUnavailable => {
+            ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable)
+        }
+        SentReconciliationError::Storage(error) => map_compose_storage_error(error),
+        SentReconciliationError::Provider(error) => {
+            let code = if matches!(
+                error.kind,
+                ProviderErrorKind::Authentication | ProviderErrorKind::Permission
+            ) {
+                ComposeCommandErrorCode::AccountUnavailable
+            } else {
+                ComposeCommandErrorCode::Internal
+            };
+            ComposeCommandError::from_code(code)
+        }
+    }
+}
+
+fn explicit_send_result_v1(result: ExplicitSendResult) -> ExplicitSendResultV1 {
+    match result {
+        ExplicitSendResult::OfflineRetained(retained) => ExplicitSendResultV1 {
+            state: ExplicitSendStateV1::OfflineSaved,
+            draft: Some(DraftV1::from_domain(retained.draft, true)),
+            attempt_id: None,
+            error_code: None,
+        },
+        ExplicitSendResult::Accepted(attempt) => ExplicitSendResultV1 {
+            state: ExplicitSendStateV1::AcceptedPending,
+            draft: None,
+            attempt_id: Some(attempt.id.to_string()),
+            error_code: None,
+        },
+        ExplicitSendResult::Rejected(attempt) => ExplicitSendResultV1 {
+            state: ExplicitSendStateV1::Rejected,
+            draft: None,
+            attempt_id: Some(attempt.id.to_string()),
+            error_code: attempt.safe_error_code,
+        },
+        ExplicitSendResult::UnknownAfterSubmission(attempt) => ExplicitSendResultV1 {
+            state: ExplicitSendStateV1::UnknownLocked,
+            draft: None,
+            attempt_id: Some(attempt.id.to_string()),
+            error_code: None,
+        },
+    }
+}
+
+fn invalid_compose_data() -> ComposeCommandError {
+    ComposeCommandError::from_code(ComposeCommandErrorCode::InvalidData)
+}
+
 #[tauri::command]
 fn application_info() -> ApplicationInfo {
     ApplicationInfo::current()
@@ -589,6 +863,308 @@ async fn connect_authorization_code_account(
         .map_err(|code| OAuthOnboardingCommandError::from_code(provider, code))?
         .connect(account_id, account_address, authorization_code)
         .await
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn list_drafts(
+    account_id: Option<String>,
+    state: tauri::State<'_, StorageState>,
+) -> Result<Vec<DraftSummaryV1>, ComposeCommandError> {
+    let account_id = account_id
+        .map(|value| AccountId::from_str(&value).map_err(|_| invalid_compose_data()))
+        .transpose()?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    tokio::task::spawn_blocking(move || {
+        let confirmations = repository.list_send_confirmation_required(account_id)?;
+        let reviewed = confirmations
+            .into_iter()
+            .map(|value| (value.draft_id, value.draft_revision))
+            .collect::<HashSet<_>>();
+        repository.list_drafts(account_id).map(|drafts| {
+            drafts
+                .into_iter()
+                .map(|draft| {
+                    let required = reviewed.contains(&(draft.id, draft.revision));
+                    DraftSummaryV1::from_domain(draft, required)
+                })
+                .collect()
+        })
+    })
+    .await
+    .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+    .map_err(map_compose_storage_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn get_draft(
+    draft_id: String,
+    state: tauri::State<'_, StorageState>,
+) -> Result<DraftV1, ComposeCommandError> {
+    let draft_id = DraftId::from_str(&draft_id).map_err(|_| invalid_compose_data())?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    tokio::task::spawn_blocking(move || {
+        let draft = repository
+            .get_draft(draft_id)?
+            .ok_or(RepositoryError::NotFound)?;
+        let required = repository
+            .list_send_confirmation_required(Some(draft.account_id))?
+            .into_iter()
+            .any(|confirmation| {
+                confirmation.draft_id == draft.id && confirmation.draft_revision == draft.revision
+            });
+        Ok(DraftV1::from_domain(draft, required))
+    })
+    .await
+    .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+    .map_err(map_compose_storage_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes the versioned request object.
+async fn save_draft(
+    request: SaveDraftRequestV1,
+    state: tauri::State<'_, StorageState>,
+) -> Result<DraftV1, ComposeCommandError> {
+    let request = request.into_validated()?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    tokio::task::spawn_blocking(move || {
+        let draft_id = request.draft_id.unwrap_or_else(DraftId::new);
+        let existing = repository.get_draft(draft_id)?;
+        if (existing.is_some() && request.expected_revision.is_none())
+            || (existing.is_none() && request.expected_revision.is_some())
+        {
+            return Err(RepositoryError::RevisionConflict);
+        }
+        let account_id = existing.as_ref().map_or(request.account_id, |draft| {
+            if draft.in_reply_to_message_id.is_some() {
+                draft.account_id
+            } else {
+                request.account_id
+            }
+        });
+        let account = repository
+            .get_account(account_id)?
+            .filter(|account| {
+                account.enabled
+                    && !account.deleting
+                    && account.auth_state == AccountAuthState::Connected
+            })
+            .ok_or(RepositoryError::ConstraintViolation)?;
+        if account.id != account_id {
+            return Err(RepositoryError::ConstraintViolation);
+        }
+        let reply_source = existing.and_then(|draft| draft.in_reply_to_message_id);
+        let draft = repository.save_draft(DraftSaveInput {
+            id: draft_id,
+            account_id,
+            to: request.to,
+            cc: request.cc,
+            bcc: request.bcc,
+            subject: request.subject,
+            plain_body: request.plain_body,
+            html_body: None,
+            in_reply_to_message_id: reply_source,
+            attachments: Vec::new(),
+            expected_revision: request.expected_revision,
+            updated_at_ms: SystemClock.now_ms(),
+        })?;
+        Ok(DraftV1::from_domain(draft, false))
+    })
+    .await
+    .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+    .map_err(map_compose_storage_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn delete_draft(
+    draft_id: String,
+    state: tauri::State<'_, StorageState>,
+) -> Result<bool, ComposeCommandError> {
+    let draft_id = DraftId::from_str(&draft_id).map_err(|_| invalid_compose_data())?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    tokio::task::spawn_blocking(move || repository.delete_draft(draft_id))
+        .await
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+        .map_err(map_compose_storage_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn create_reply_draft(
+    message_id: String,
+    storage_state: tauri::State<'_, StorageState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
+) -> Result<DraftV1, ComposeCommandError> {
+    let message_id = MessageId::from_str(&message_id).map_err(|_| invalid_compose_data())?;
+    let repository = storage_state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    let source_repository = Arc::clone(&repository);
+    let source =
+        tokio::task::spawn_blocking(move || source_repository.get_reply_source(message_id))
+            .await
+            .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+            .map_err(map_compose_storage_error)?
+            .ok_or_else(|| ComposeCommandError::from_code(ComposeCommandErrorCode::NotFound))?;
+    let account_repository = Arc::clone(&repository);
+    let account =
+        tokio::task::spawn_blocking(move || account_repository.get_account(source.account_id))
+            .await
+            .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+            .map_err(map_compose_storage_error)?
+            .ok_or_else(|| {
+                ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable)
+            })?;
+    let provider = send_provider_for(account.provider, &oauth_state, &authorization_state)?;
+    let service = explicit_send_service(repository, provider);
+    service
+        .create_reply_draft(message_id, DraftId::new())
+        .await
+        .map(|draft| DraftV1::from_domain(draft, false))
+        .map_err(map_explicit_send_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes the versioned request object.
+async fn send_draft(
+    request: ExplicitSendRequestV1,
+    storage_state: tauri::State<'_, StorageState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
+    connectivity: tauri::State<'_, DesktopConnectivity>,
+) -> Result<ExplicitSendResultV1, ComposeCommandError> {
+    let request = request.into_validated()?;
+    let repository = storage_state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    let account_repository = Arc::clone(&repository);
+    let draft = tokio::task::spawn_blocking(move || account_repository.get_draft(request.draft_id))
+        .await
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+        .map_err(map_compose_storage_error)?
+        .ok_or_else(|| ComposeCommandError::from_code(ComposeCommandErrorCode::NotFound))?;
+    let account_repository = Arc::clone(&repository);
+    let account =
+        tokio::task::spawn_blocking(move || account_repository.get_account(draft.account_id))
+            .await
+            .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+            .map_err(map_compose_storage_error)?
+            .ok_or_else(|| {
+                ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable)
+            })?;
+    let provider = send_provider_for(account.provider, &oauth_state, &authorization_state)?;
+    let service = explicit_send_service(repository, provider);
+    let cancellation = DesktopCancellation::default();
+    service
+        .send_draft(
+            ExplicitSendRequest {
+                draft_id: request.draft_id,
+                draft_revision: request.draft_revision,
+                empty_subject_confirmed: request.empty_subject_confirmed,
+                offline_review_confirmed: request.offline_review_confirmed,
+            },
+            connectivity.current(),
+            &cancellation,
+        )
+        .await
+        .map(explicit_send_result_v1)
+        .map_err(map_explicit_send_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn list_sent_items(
+    account_id: Option<String>,
+    state: tauri::State<'_, StorageState>,
+) -> Result<Vec<SentItemV1>, ComposeCommandError> {
+    let account_id = account_id
+        .map(|value| AccountId::from_str(&value).map_err(|_| invalid_compose_data()))
+        .transpose()?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    tokio::task::spawn_blocking(move || repository.list_sent_projections(account_id))
+        .await
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+        .map(|items| items.into_iter().map(Into::into).collect())
+        .map_err(map_compose_storage_error)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn refresh_sent_items(
+    account_id: String,
+    storage_state: tauri::State<'_, StorageState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
+) -> Result<SentRefreshResultV1, ComposeCommandError> {
+    let account_id = AccountId::from_str(&account_id).map_err(|_| invalid_compose_data())?;
+    let repository = storage_state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    let account_repository = Arc::clone(&repository);
+    let account = tokio::task::spawn_blocking(move || account_repository.get_account(account_id))
+        .await
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+        .map_err(map_compose_storage_error)?
+        .ok_or_else(|| {
+            ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable)
+        })?;
+    let provider =
+        sent_reconciliation_provider_for(account.provider, &oauth_state, &authorization_state)?;
+    let service = sent_reconciliation_service(repository, provider);
+    let updated_attempts = service
+        .refresh_account(account_id, &DesktopCancellation::default())
+        .await
+        .map_err(map_sent_reconciliation_error)?;
+    Ok(SentRefreshResultV1 {
+        account_id: account_id.to_string(),
+        updated_attempts,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn authorize_outbound_retry(
+    attempt_id: String,
+    state: tauri::State<'_, StorageState>,
+) -> Result<RetryAuthorizationResultV1, ComposeCommandError> {
+    let attempt_id =
+        OutboundAttemptId::from_str(&attempt_id).map_err(|_| invalid_compose_data())?;
+    let repository = state
+        .repository()
+        .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::StorageUnavailable))?;
+    let authorized = tokio::task::spawn_blocking(move || {
+        repository.authorize_outbound_retry(AuthorizeOutboundRetryInput {
+            attempt_id,
+            authorized_at_ms: SystemClock.now_ms(),
+        })
+    })
+    .await
+    .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::Internal))?
+    .map_err(map_compose_storage_error)?;
+    Ok(RetryAuthorizationResultV1 {
+        attempt_id: attempt_id.to_string(),
+        authorized,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command state is a framework-owned extractor.
+fn report_connectivity(online: bool, state: tauri::State<'_, DesktopConnectivity>) {
+    state.report(online);
 }
 
 #[tauri::command]
@@ -728,9 +1304,11 @@ pub fn run() {
             let storage = StorageState::initialize(app, Arc::clone(&credentials));
             let oauth = OAuthState::initialize(&storage, Arc::clone(&credentials));
             let authorization_code = AuthorizationCodeState::initialize(&storage, credentials);
+            let connectivity = DesktopConnectivity::default();
             app.manage(storage);
             app.manage(oauth);
             app.manage(authorization_code);
+            app.manage(connectivity);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -741,6 +1319,16 @@ pub fn run() {
             cancel_oauth_onboarding,
             connect_authorization_code_account,
             connected_accounts,
+            list_drafts,
+            get_draft,
+            save_draft,
+            delete_draft,
+            create_reply_draft,
+            send_draft,
+            list_sent_items,
+            refresh_sent_items,
+            authorize_outbound_retry,
+            report_connectivity,
             list_inbox_messages,
             get_message_detail,
             assign_message_read_state,

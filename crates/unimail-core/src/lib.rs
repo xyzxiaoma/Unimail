@@ -1,5 +1,7 @@
 //! Provider-neutral Unimail domain foundations.
 
+mod compose;
+mod compose_ipc;
 mod domain;
 mod ids;
 mod mime;
@@ -11,6 +13,18 @@ mod storage;
 use serde::Serialize;
 use ts_rs::TS;
 
+pub use compose::{
+    AuthorizeOutboundRetryInput, CompleteOutboundAttemptInput, OutboundAttempt,
+    OutboundAttemptOutcome, OutboundAttemptSnapshot, OutboundAttemptState, OutboundFailureCode,
+    PrepareOutboundAttemptInput, ReconcileOutboundAttemptInput, RecordSentRefreshInput,
+    ReplySource, SentProjection,
+};
+pub use compose_ipc::{
+    ComposeCommandError, ComposeCommandErrorCode, DraftAddressV1, DraftSummaryV1, DraftV1,
+    ExplicitSendRequestV1, ExplicitSendResultV1, ExplicitSendStateV1, RetryAuthorizationResultV1,
+    SaveDraftRequestV1, SentItemV1, SentRefreshResultV1, ValidatedDraftSaveRequest,
+    ValidatedExplicitSendRequest,
+};
 pub use domain::{
     Account, AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult,
     AccountCreateInput, AddressRole, Attachment, AttachmentInput, ClaimDesiredReadMutationInput,
@@ -26,7 +40,9 @@ pub use domain::{
     SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
     TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
-pub use ids::{AccountId, AttachmentId, DraftId, LeaseId, MailboxId, MessageId, OperationId};
+pub use ids::{
+    AccountId, AttachmentId, DraftId, LeaseId, MailboxId, MessageId, OperationId, OutboundAttemptId,
+};
 pub use mime::{
     AttachmentContent, ComposedMessage, DeliveryEnvelope, MimeAddress, MimeAddressEntry,
     MimeAddressRole, MimeAttachment, MimeBody, MimeCodec, MimeError, MimeErrorKind, MimeLimits,
@@ -44,8 +60,8 @@ pub use provider::{
     OpaqueProviderCursor, PageContinuation, ProviderError, ProviderErrorKind, ProviderFuture,
     ProviderResult, ProviderRevision, ReadStateAck, ReconciliationKey, RejectedSend, RemoteChange,
     RemoteMailbox, RemoteMailboxKey, RemoteMessage, RemoteMessageKey, RetryHint, SafeRequestId,
-    SendOutcome, SendRequest, SensitiveString, SetReadRequest, StartLoginRequest, SyncPage,
-    SyncPageState, UnknownSend,
+    SendOutcome, SendRequest, SensitiveString, SentReconciliationRequest, SentReconciliationResult,
+    SetReadRequest, StartLoginRequest, SyncPage, SyncPageState, UnknownSend,
 };
 pub use reader::{
     AssignReadStateResultV1, InboxMessageSummaryV1, InboxPageRequestV1, InboxPageV1,

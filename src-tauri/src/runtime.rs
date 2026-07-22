@@ -1,17 +1,23 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use unimail_application::{Clock, RandomSource, StoreFuture, SyncStore};
+use time::{OffsetDateTime, format_description::well_known::Rfc2822};
+use unimail_application::{
+    Clock, ComposeStore, ConnectivityState, OutboundIdentity, OutboundIdentityGenerator,
+    RandomSource, StoreFuture, SyncStore,
+};
 use unimail_core::{
     Account, AccountAuthUpdateInput, AccountId, ClaimDesiredReadMutationInput,
-    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, DesiredReadMutation,
-    DraftSendReviewKey, LeaseRecoveryResult, OfflineDraftReviewInput, OfflineDraftReviewResult,
-    OperationId, Provider, RepositoryError, ScheduleSyncInput, SendConfirmationRequired,
+    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput,
+    DesiredReadMutation, Draft, DraftId, DraftSaveInput, DraftSendReviewKey, LeaseRecoveryResult,
+    MessageId, OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, OutboundAttempt,
+    PrepareOutboundAttemptInput, Provider, ReconcileOutboundAttemptInput, RecordSentRefreshInput,
+    ReplySource, RepositoryError, ScheduleSyncInput, SendConfirmationRequired, SentProjection,
     StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
     SyncOperationSummary, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
@@ -178,6 +184,74 @@ impl SyncStore for TokioSyncStore {
     }
 }
 
+impl ComposeStore for TokioSyncStore {
+    fn get_account(&self, account_id: AccountId) -> StoreFuture<'_, Option<Account>> {
+        self.blocking(move |repository| repository.get_account(account_id))
+    }
+
+    fn get_draft(&self, draft_id: DraftId) -> StoreFuture<'_, Option<Draft>> {
+        self.blocking(move |repository| repository.get_draft(draft_id))
+    }
+
+    fn save_draft(&self, input: DraftSaveInput) -> StoreFuture<'_, Draft> {
+        self.blocking(move |repository| repository.save_draft(input))
+    }
+
+    fn get_reply_source(&self, message_id: MessageId) -> StoreFuture<'_, Option<ReplySource>> {
+        self.blocking(move |repository| repository.get_reply_source(message_id))
+    }
+
+    fn retain_offline_draft(
+        &self,
+        input: OfflineDraftReviewInput,
+    ) -> StoreFuture<'_, OfflineDraftReviewResult> {
+        self.blocking(move |repository| repository.save_draft_for_offline_review(input))
+    }
+
+    fn list_send_confirmation_required(
+        &self,
+        account_id: Option<AccountId>,
+    ) -> StoreFuture<'_, Vec<SendConfirmationRequired>> {
+        self.blocking(move |repository| repository.list_send_confirmation_required(account_id))
+    }
+
+    fn consume_draft_send_review(&self, key: DraftSendReviewKey) -> StoreFuture<'_, bool> {
+        self.blocking(move |repository| repository.consume_draft_send_review(key))
+    }
+
+    fn prepare_outbound_attempt(
+        &self,
+        input: PrepareOutboundAttemptInput,
+    ) -> StoreFuture<'_, OutboundAttempt> {
+        self.blocking(move |repository| repository.prepare_outbound_attempt(input))
+    }
+
+    fn complete_outbound_attempt(
+        &self,
+        input: CompleteOutboundAttemptInput,
+    ) -> StoreFuture<'_, OutboundAttempt> {
+        self.blocking(move |repository| repository.complete_outbound_attempt(input))
+    }
+
+    fn list_sent_projections(
+        &self,
+        account_id: Option<AccountId>,
+    ) -> StoreFuture<'_, Vec<SentProjection>> {
+        self.blocking(move |repository| repository.list_sent_projections(account_id))
+    }
+
+    fn record_sent_refresh(&self, input: RecordSentRefreshInput) -> StoreFuture<'_, u32> {
+        self.blocking(move |repository| repository.record_sent_refresh(input))
+    }
+
+    fn reconcile_outbound_attempt(
+        &self,
+        input: ReconcileOutboundAttemptInput,
+    ) -> StoreFuture<'_, OutboundAttempt> {
+        self.blocking(move |repository| repository.reconcile_outbound_attempt(input))
+    }
+}
+
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
@@ -187,6 +261,41 @@ impl Clock for SystemClock {
             .ok()
             .and_then(|duration| i64::try_from(duration.as_millis()).ok())
             .unwrap_or(0)
+    }
+}
+
+pub(crate) struct RuntimeOutboundIdentity;
+
+impl OutboundIdentityGenerator for RuntimeOutboundIdentity {
+    fn generate(&self) -> OutboundIdentity {
+        let message_id = format!("{}@unimail.invalid", uuid::Uuid::new_v4());
+        let date_rfc2822 = OffsetDateTime::now_utc()
+            .format(&Rfc2822)
+            .unwrap_or_else(|_| "Thu, 01 Jan 1970 00:00:00 +0000".to_owned());
+        OutboundIdentity {
+            message_id,
+            date_rfc2822,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct DesktopConnectivity {
+    state: AtomicU8,
+}
+
+impl DesktopConnectivity {
+    pub(crate) fn report(&self, online: bool) {
+        self.state
+            .store(if online { 1 } else { 2 }, Ordering::Release);
+    }
+
+    pub(crate) fn current(&self) -> ConnectivityState {
+        if self.state.load(Ordering::Acquire) == 2 {
+            ConnectivityState::Offline
+        } else {
+            ConnectivityState::AvailableOrUnknown
+        }
     }
 }
 
@@ -219,13 +328,25 @@ impl RandomSource for RuntimeRandom {
 
 #[cfg(test)]
 mod tests {
-    use super::{RandomSource, RuntimeRandom, SystemClock};
-    use unimail_application::Clock;
+    use super::{
+        DesktopConnectivity, RandomSource, RuntimeOutboundIdentity, RuntimeRandom, SystemClock,
+    };
+    use unimail_application::{Clock, ConnectivityState, OutboundIdentityGenerator};
 
     #[test]
     fn runtime_clock_and_jitter_source_are_non_panicking() {
         assert!(SystemClock.now_ms() >= 0);
         let random = RuntimeRandom::new();
         assert_ne!(random.next_u64(), random.next_u64());
+        let identity = RuntimeOutboundIdentity.generate();
+        assert!(identity.message_id.ends_with("@unimail.invalid"));
+        assert!(!identity.date_rfc2822.is_empty());
+        let connectivity = DesktopConnectivity::default();
+        assert_eq!(
+            connectivity.current(),
+            ConnectivityState::AvailableOrUnknown
+        );
+        connectivity.report(false);
+        assert_eq!(connectivity.current(), ConnectivityState::Offline);
     }
 }

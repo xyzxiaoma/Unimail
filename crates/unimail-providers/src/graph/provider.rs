@@ -13,8 +13,8 @@ use unimail_core::{
     NormalizedMimeMessage, OpaqueProviderCursor, PageContinuation, Provider, ProviderError,
     ProviderErrorKind, ProviderFuture, ProviderResult, ProviderRevision, ReadStateAck,
     ReconciliationKey, RejectedSend, RemoteChange, RemoteMailbox, RemoteMailboxKey, RemoteMessage,
-    RemoteMessageKey, SendOutcome, SendRequest, SetReadRequest, SyncPage, SyncPageState,
-    UnknownSend,
+    RemoteMessageKey, SendOutcome, SendRequest, SentReconciliationRequest,
+    SentReconciliationResult, SetReadRequest, SyncPage, SyncPageState, UnknownSend,
 };
 use url::Url;
 
@@ -511,6 +511,66 @@ impl GraphProvider {
         })
     }
 
+    async fn find_sent_message(
+        &self,
+        request: &SentReconciliationRequest,
+        cancellation: &dyn Cancellation,
+    ) -> ProviderResult<SentReconciliationResult> {
+        let credential = self.registry.get(request.account_id)?;
+        let mut url = self.api_url(&["me", "mailFolders", "sentitems", "messages"])?;
+        let escaped_message_id = request.reconciliation_key.expose().replace('\'', "''");
+        url.query_pairs_mut()
+            .append_pair("$select", MESSAGE_SELECT)
+            .append_pair(
+                "$filter",
+                &format!("internetMessageId eq '{escaped_message_id}'"),
+            )
+            .append_pair("$top", "10");
+        let page: GraphPage = self
+            .authorized_json(&credential, cancellation, false, |client, token| {
+                immutable(client.get(url.clone()).bearer_auth(token))
+            })
+            .await?;
+        for candidate in page.value {
+            if candidate.removed.is_some()
+                || request
+                    .provider_message_id
+                    .as_deref()
+                    .is_some_and(|id| id != candidate.id)
+                || normalize_message_id(candidate.internet_message_id.as_deref())
+                    != normalize_message_id(Some(request.reconciliation_key.expose()))
+            {
+                continue;
+            }
+            let message = self
+                .fetch_remote_message(
+                    request.account_id,
+                    "sentitems",
+                    &candidate.id,
+                    &credential,
+                    cancellation,
+                )
+                .await?;
+            if normalize_message_id(message.mime.message_id.as_deref())
+                != normalize_message_id(Some(request.reconciliation_key.expose()))
+            {
+                continue;
+            }
+            return Ok(SentReconciliationResult::Found {
+                mailbox: RemoteMailbox {
+                    key: RemoteMailboxKey {
+                        account_id: request.account_id,
+                        provider_mailbox_id: "sentitems".to_owned(),
+                    },
+                    role: MailboxRole::Sent,
+                    display_name: "已发送".to_owned(),
+                },
+                message: Box::new(message),
+            });
+        }
+        Ok(SentReconciliationResult::Pending)
+    }
+
     async fn list_attachments(
         &self,
         message_id: &str,
@@ -967,6 +1027,17 @@ impl MailProvider for GraphProvider {
             ))
         })
     }
+
+    fn find_sent<'a>(
+        &'a self,
+        request: SentReconciliationRequest,
+        cancellation: &'a dyn Cancellation,
+    ) -> ProviderFuture<'a, SentReconciliationResult> {
+        Box::pin(async move {
+            ensure_not_cancelled(cancellation)?;
+            self.find_sent_message(&request, cancellation).await
+        })
+    }
 }
 
 impl fmt::Debug for GraphProvider {
@@ -1218,7 +1289,8 @@ mod tests {
         AccountId, AttachmentRequest, AttachmentSink, AttachmentSinkError, AttachmentSinkFuture,
         ComposedMessage, CredentialRef, CredentialStore, CredentialStoreError, CredentialStoreKind,
         DeliveryEnvelope, InitialSyncLimit, InitialSyncRequest, MailProvider, OpaqueProviderCursor,
-        PageContinuation, ProviderRevision, SecretBytes, SendOutcome, SendRequest, SetReadRequest,
+        PageContinuation, ProviderRevision, ReconciliationKey, SecretBytes, SendOutcome,
+        SendRequest, SentReconciliationRequest, SentReconciliationResult, SetReadRequest,
         SyncPageState,
     };
 
@@ -1683,5 +1755,54 @@ mod tests {
                 .iter()
                 .all(|request| request.ends_with(r#"{"isRead":true}"#))
         );
+    }
+
+    #[tokio::test]
+    async fn sent_reconciliation_filters_sent_items_by_internet_message_id() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let base = format!("http://{address}");
+        let internet_message_id = "<sent-message@example.com>";
+        let metadata = format!(
+            r#"{{"id":"sent-1","conversationId":"conversation-1","changeKey":"revision-1","receivedDateTime":"2026-07-20T08:09:10Z","sentDateTime":"2026-07-20T08:08:10Z","isRead":true,"internetMessageId":"{internet_message_id}","hasAttachments":false}}"#
+        );
+        let mime = format!(
+            "From: owner@example.com\r\nTo: recipient@example.com\r\nMessage-ID: {internet_message_id}\r\nSubject: Sent fixture\r\n\r\nHello"
+        );
+        let server = tokio::spawn(serve(
+            listener,
+            vec![
+                (
+                    "200 OK",
+                    format!(r#"{{"value":[{metadata}]}}"#),
+                    "application/json",
+                ),
+                ("200 OK", metadata, "application/json"),
+                ("200 OK", mime, "message/rfc822"),
+            ],
+        ));
+        let (provider, account_id, _) = configured_provider(&base);
+
+        let result = MailProvider::find_sent(
+            &provider,
+            SentReconciliationRequest {
+                account_id,
+                provider_message_id: None,
+                reconciliation_key: ReconciliationKey::new(internet_message_id),
+            },
+            &FakeCancellation::default(),
+        )
+        .await
+        .expect("Sent lookup should succeed");
+        assert!(matches!(result, SentReconciliationResult::Found { .. }));
+        let requests = server.await.expect("server should finish");
+        assert!(requests[0].contains("mailFolders/sentitems/messages"));
+        assert!(
+            requests[0]
+                .contains("%24filter=internetMessageId+eq+%27%3Csent-message%40example.com%3E%27")
+        );
+        assert!(requests.iter().all(|request| !request.contains("sendMail")));
     }
 }

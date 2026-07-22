@@ -76,6 +76,8 @@ uuid_id!(/// Stable local attachment identifier.
     AttachmentId);
 uuid_id!(/// Stable local draft identifier.
     DraftId);
+uuid_id!(/// Stable local identifier for one explicit outbound submission attempt.
+    OutboundAttemptId);
 uuid_id!(/// Stable local asynchronous or synchronization operation identifier.
     OperationId);
 uuid_id!(/// Stable identifier for one recoverable synchronization or mutation lease.

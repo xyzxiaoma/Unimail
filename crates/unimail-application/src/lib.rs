@@ -1,5 +1,6 @@
 //! Runtime-neutral synchronization and offline-safety orchestration.
 
+mod compose;
 mod coordinator;
 mod permits;
 mod retry;
@@ -20,6 +21,11 @@ use unimail_core::{
     TransitionSyncOperationInput,
 };
 
+pub use compose::{
+    ComposeStore, ConnectivityState, ExplicitSendError, ExplicitSendProvider, ExplicitSendRequest,
+    ExplicitSendResult, ExplicitSendService, OutboundIdentity, OutboundIdentityGenerator,
+    SentReconciliationError, SentReconciliationProvider, SentReconciliationService,
+};
 pub use coordinator::{CoordinatorError, RunOutcome, SyncCoordinator};
 pub use permits::{BoundedSyncPermitPool, SyncPermit, SyncPermitPool};
 pub use retry::{

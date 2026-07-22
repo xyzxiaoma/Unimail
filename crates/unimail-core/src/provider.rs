@@ -405,6 +405,51 @@ pub struct UnknownSend {
     pub reconciliation_key: ReconciliationKey,
 }
 
+/// Read-only lookup input for locating one submitted message in provider Sent storage.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SentReconciliationRequest {
+    pub account_id: AccountId,
+    pub provider_message_id: Option<String>,
+    pub reconciliation_key: ReconciliationKey,
+}
+
+impl fmt::Debug for SentReconciliationRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SentReconciliationRequest")
+            .field("account_id", &self.account_id)
+            .field(
+                "has_provider_message_id",
+                &self.provider_message_id.is_some(),
+            )
+            .field("reconciliation_key", &self.reconciliation_key)
+            .finish()
+    }
+}
+
+/// Read-only provider observation used to reconcile one durable outbound attempt.
+#[derive(Clone, PartialEq, Eq)]
+pub enum SentReconciliationResult {
+    Pending,
+    Found {
+        mailbox: RemoteMailbox,
+        message: Box<RemoteMessage>,
+    },
+}
+
+impl fmt::Debug for SentReconciliationResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => formatter.write_str("SentReconciliationResult::Pending"),
+            Self::Found { mailbox, message } => formatter
+                .debug_struct("SentReconciliationResult::Found")
+                .field("mailbox", mailbox)
+                .field("message", message)
+                .finish(),
+        }
+    }
+}
+
 /// Backend-only send reconciliation identity with redacted diagnostics.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ReconciliationKey(String);
@@ -638,6 +683,12 @@ pub trait MailProvider: Send + Sync {
         request: SendRequest,
         cancellation: &'a dyn Cancellation,
     ) -> ProviderFuture<'a, SendOutcome>;
+
+    fn find_sent<'a>(
+        &'a self,
+        request: SentReconciliationRequest,
+        cancellation: &'a dyn Cancellation,
+    ) -> ProviderFuture<'a, SentReconciliationResult>;
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 use rusqlite_migration::{M, Migrations};
 
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+pub(crate) const SCHEMA_VERSION: u32 = 3;
 
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(include_str!("../migrations/0001_initial.sql")),
         M::up(include_str!("../migrations/0002_sync_offline.sql")),
+        M::up(include_str!("../migrations/0003_compose_send.sql")),
     ])
 }
 
@@ -58,6 +59,7 @@ mod tests {
         let schema = [
             include_str!("../migrations/0001_initial.sql"),
             include_str!("../migrations/0002_sync_offline.sql"),
+            include_str!("../migrations/0003_compose_send.sql"),
         ]
         .concat()
         .to_ascii_lowercase();
