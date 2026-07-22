@@ -40,6 +40,10 @@ impl AuthorizationCodeManager {
         }
     }
 
+    pub(crate) fn sync_coordinator(&self) -> Arc<SyncCoordinator> {
+        Arc::clone(&self.coordinator)
+    }
+
     pub(crate) async fn connect(
         &self,
         account_id: Option<String>,

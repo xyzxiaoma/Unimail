@@ -9,7 +9,7 @@ use crate::{
     Account, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult, AccountCreateInput,
     AccountId, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
     CompleteDesiredReadMutationInput, DeleteAccountResult, DesiredReadMutation, Draft, DraftId,
-    DraftSaveInput, DraftSendReviewKey, DraftSummary, LeaseRecoveryResult, Mailbox,
+    DraftSaveInput, DraftSendReviewKey, DraftSummary, InboxListInput, LeaseRecoveryResult, Mailbox,
     MailboxUpsertInput, MessageDetail, MessageId, MessageListInput, MessagePage,
     MessageReadStateInput, MessageUpsertInput, MessageUpsertResult, OfflineDraftReviewInput,
     OfflineDraftReviewResult, OperationId, Provider, ScheduleSyncInput, SendConfirmationRequired,
@@ -318,6 +318,13 @@ pub trait StorageRepository: Send + Sync {
     ///
     /// Returns a repository category when the request is invalid or storage cannot be queried.
     fn list_messages(&self, input: &MessageListInput) -> RepositoryResult<MessagePage>;
+
+    /// Lists one deterministic page from enabled, non-deleting Inbox mailboxes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried.
+    fn list_inbox_messages(&self, input: &InboxListInput) -> RepositoryResult<MessagePage>;
 
     /// Gets full normalized message detail.
     ///

@@ -31,8 +31,9 @@ pub enum MailboxRole {
 }
 
 /// Role of an address in a normalized message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum AddressRole {
     From,
     Sender,
@@ -43,8 +44,9 @@ pub enum AddressRole {
 }
 
 /// Direction used for mailbox presentation and synchronization policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum MessageDirection {
     Incoming,
     Outgoing,
@@ -283,6 +285,15 @@ pub struct MessagePageCursor {
 pub struct MessageListInput {
     pub account_id: AccountId,
     pub mailbox_id: Option<MailboxId>,
+    pub before: Option<MessagePageCursor>,
+    pub limit: u32,
+}
+
+/// Filters and bounds for the local unified Inbox read model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxListInput {
+    pub account_id: Option<AccountId>,
+    pub unread_only: bool,
     pub before: Option<MessagePageCursor>,
     pub limit: u32,
 }

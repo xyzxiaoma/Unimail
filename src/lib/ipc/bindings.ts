@@ -26,6 +26,26 @@ export type ConnectedAccountSummary = { id: string, provider: Provider, email: s
 
 export type OAuthOnboardingStatus = { provider: Provider, state: OAuthOnboardingState, flowId: string | null, account: ConnectedAccountSummary | null, error: OAuthOnboardingCommandError | null, };
 
+export type AddressRole = "from" | "sender" | "to" | "cc" | "bcc" | "reply_to";
+
+export type MessageDirection = "incoming" | "outgoing";
+
+export type InboxPageRequestV1 = { accountId: string | null, unreadOnly: boolean, cursor: string | null, limit: number, };
+
+export type InboxMessageSummaryV1 = { id: string, accountId: string, mailboxId: string, subject: string | null, snippet: string | null, senderName: string | null, senderAddress: string | null, read: boolean, direction: MessageDirection, sentAtMs: string | null, receivedAtMs: string, hasAttachments: boolean, };
+
+export type InboxPageV1 = { items: Array<InboxMessageSummaryV1>, nextCursor: string | null, };
+
+export type MessageAddressV1 = { role: AddressRole, position: number, displayName: string | null, address: string, };
+
+export type ReaderAttachmentV1 = { id: string, fileName: string | null, mediaType: string, sizeBytes: string | null, contentId: string | null, inline: boolean, };
+
+export type RemoteImageResultV1 = { mediaType: string, dataUrl: string, };
+
+export type MessageDetailV1 = { summary: InboxMessageSummaryV1, threadId: string | null, rfcMessageId: string | null, plainBody: string | null, htmlBody: string | null, parserVersion: number, sanitizerVersion: number, addresses: Array<MessageAddressV1>, attachments: Array<ReaderAttachmentV1>, };
+
+export type AssignReadStateResultV1 = { messageId: string, read: boolean, generation: string, };
+
 export function applicationInfo(): Promise<unknown> {
   return invoke("application_info");
 }
@@ -52,4 +72,24 @@ export function connectAuthorizationCodeAccount(provider: Provider, accountId: s
 
 export function connectedAccounts(): Promise<unknown> {
   return invoke("connected_accounts");
+}
+
+export function listInboxMessages(request: InboxPageRequestV1): Promise<unknown> {
+  return invoke("list_inbox_messages", { request });
+}
+
+export function getMessageDetail(messageId: string): Promise<unknown> {
+  return invoke("get_message_detail", { messageId });
+}
+
+export function assignMessageReadState(messageId: string, read: boolean): Promise<unknown> {
+  return invoke("assign_message_read_state", { messageId, read });
+}
+
+export function fetchMessageRemoteImage(messageId: string, url: string): Promise<unknown> {
+  return invoke("fetch_message_remote_image", { messageId, url });
+}
+
+export function openConfirmedExternalUrl(url: string): Promise<unknown> {
+  return invoke("open_confirmed_external_url", { url });
 }

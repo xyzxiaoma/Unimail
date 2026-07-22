@@ -1,9 +1,10 @@
 mod authorization_onboarding;
 mod oauth;
 mod onboarding;
+mod remote_image;
 mod runtime;
 
-use std::{sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use tauri::Manager;
 use unimail_application::{
@@ -11,10 +12,11 @@ use unimail_application::{
     SyncProvider, SyncStore,
 };
 use unimail_core::{
-    AccountAuthState, ApplicationInfo, ConnectedAccountSummary, CredentialStore,
-    OAuthOnboardingCommandError, OAuthOnboardingErrorCode, OAuthOnboardingStatus, Provider,
-    RepositoryError, RepositoryResult, StorageCommandError, StorageRepository, StorageStatus,
-    SyncState,
+    AccountAuthState, ApplicationInfo, AssignReadStateResultV1, ConnectedAccountSummary,
+    CredentialStore, InboxPageRequestV1, InboxPageV1, MessageDetailV1, MessageId,
+    MessageReadStateInput, OAuthOnboardingCommandError, OAuthOnboardingErrorCode,
+    OAuthOnboardingStatus, Provider, RemoteImageResultV1, RepositoryError, RepositoryResult,
+    StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus, SyncState,
 };
 use unimail_providers::{
     SharedMimeCodec,
@@ -60,6 +62,13 @@ impl StorageState {
         };
 
         map_storage_status(result)
+    }
+
+    fn repository(&self) -> Result<Arc<SqlCipherRepository>, StorageCommandError> {
+        self.repository
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| StorageCommandError::from(*error))
     }
 }
 
@@ -161,6 +170,12 @@ impl AuthorizationCodeState {
             Provider::Netease => self.netease.clone(),
             Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
+    }
+
+    fn coordinator(&self, provider: Provider) -> Option<Arc<SyncCoordinator>> {
+        self.manager(provider)
+            .ok()
+            .map(|manager| manager.sync_coordinator())
     }
 
     async fn connected_accounts(
@@ -312,6 +327,12 @@ impl OAuthState {
             Provider::Outlook => self.outlook.clone(),
             Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
+    }
+
+    fn coordinator(&self, provider: Provider) -> Option<Arc<SyncCoordinator>> {
+        self.manager(provider)
+            .ok()
+            .and_then(|manager| manager.sync_coordinator())
     }
 
     fn status(&self, provider: Provider) -> OAuthOnboardingStatus {
@@ -570,6 +591,129 @@ async fn connect_authorization_code_account(
         .await
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes the versioned request object.
+async fn list_inbox_messages(
+    request: InboxPageRequestV1,
+    state: tauri::State<'_, StorageState>,
+) -> Result<InboxPageV1, StorageCommandError> {
+    let input = request.into_domain()?;
+    let repository = state.repository()?;
+    let page = tokio::task::spawn_blocking(move || repository.list_inbox_messages(&input))
+        .await
+        .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??;
+    Ok(page.into())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn get_message_detail(
+    message_id: String,
+    state: tauri::State<'_, StorageState>,
+) -> Result<MessageDetailV1, StorageCommandError> {
+    let message_id = MessageId::from_str(&message_id)
+        .map_err(|_| StorageCommandError::from_code(StorageErrorCode::InvalidData))?;
+    let repository = state.repository()?;
+    let detail = tokio::task::spawn_blocking(move || repository.get_message(message_id))
+        .await
+        .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??
+        .ok_or_else(|| StorageCommandError::from_code(StorageErrorCode::NotFound))?;
+    Ok(detail.into())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn assign_message_read_state(
+    message_id: String,
+    read: bool,
+    storage_state: tauri::State<'_, StorageState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
+) -> Result<AssignReadStateResultV1, StorageCommandError> {
+    let message_id = MessageId::from_str(&message_id)
+        .map_err(|_| StorageCommandError::from_code(StorageErrorCode::InvalidData))?;
+    let repository = storage_state.repository()?;
+    let updated_at_ms = SystemClock.now_ms();
+    let repository_for_mutation = Arc::clone(&repository);
+    let mutation = tokio::task::spawn_blocking(move || {
+        repository_for_mutation.set_message_read(MessageReadStateInput {
+            message_id,
+            read,
+            updated_at_ms,
+        })
+    })
+    .await
+    .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??;
+    let account_id = mutation.key.account_id;
+    let account = tokio::task::spawn_blocking(move || repository.get_account(account_id))
+        .await
+        .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??
+        .ok_or_else(|| StorageCommandError::from_code(StorageErrorCode::NotFound))?;
+    let coordinator = oauth_state
+        .coordinator(account.provider)
+        .or_else(|| authorization_state.coordinator(account.provider))
+        .ok_or_else(|| StorageCommandError::from_code(StorageErrorCode::Internal))?;
+    tauri::async_runtime::spawn(async move {
+        let cancellation = DesktopCancellation::default();
+        let _ = coordinator
+            .run_one_read_mutation(account_id, &cancellation)
+            .await;
+    });
+    Ok(AssignReadStateResultV1 {
+        message_id: mutation.message_id.to_string(),
+        read: mutation.desired_read,
+        generation: mutation.generation.get().to_string(),
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+async fn fetch_message_remote_image(
+    message_id: String,
+    url: String,
+    state: tauri::State<'_, StorageState>,
+) -> Result<RemoteImageResultV1, StorageCommandError> {
+    let message_id = MessageId::from_str(&message_id)
+        .map_err(|_| StorageCommandError::from_code(StorageErrorCode::InvalidData))?;
+    let repository = state.repository()?;
+    let detail = tokio::task::spawn_blocking(move || repository.get_message(message_id))
+        .await
+        .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??
+        .ok_or_else(|| StorageCommandError::from_code(StorageErrorCode::NotFound))?;
+    let html = detail
+        .html_body
+        .ok_or_else(|| StorageCommandError::from_code(StorageErrorCode::InvalidData))?;
+    remote_image::fetch_remote_image(&html, &url).await
+}
+
+fn validate_external_url(value: &str) -> Result<url::Url, StorageCommandError> {
+    if value.len() > 2_048 || value.chars().any(char::is_control) {
+        return Err(StorageCommandError::from_code(
+            StorageErrorCode::InvalidData,
+        ));
+    }
+    let parsed = url::Url::parse(value)
+        .map_err(|_| StorageCommandError::from_code(StorageErrorCode::InvalidData))?;
+    if !matches!(parsed.scheme(), "https" | "http")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(StorageCommandError::from_code(
+            StorageErrorCode::InvalidData,
+        ));
+    }
+    Ok(parsed)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+fn open_confirmed_external_url(url: String) -> Result<(), StorageCommandError> {
+    let url = validate_external_url(&url)?;
+    open::that_detached(url.as_str())
+        .map_err(|_| StorageCommandError::from_code(StorageErrorCode::Internal))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Starts the Tauri desktop process and installs the approved IPC commands.
 ///
@@ -596,7 +740,12 @@ pub fn run() {
             start_oauth_onboarding,
             cancel_oauth_onboarding,
             connect_authorization_code_account,
-            connected_accounts
+            connected_accounts,
+            list_inbox_messages,
+            get_message_detail,
+            assign_message_read_state,
+            fetch_message_remote_image,
+            open_confirmed_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Unimail");
@@ -606,7 +755,7 @@ pub fn run() {
 mod tests {
     use unimail_core::{CredentialStoreKind, RepositoryError, StorageErrorCode, StorageStatus};
 
-    use super::map_storage_status;
+    use super::{map_storage_status, validate_external_url};
 
     #[test]
     fn status_mapping_preserves_safe_success_metadata() {
@@ -632,5 +781,29 @@ mod tests {
         assert!(!error.message.contains("unimail.db"));
         assert!(!error.message.contains('\\'));
         assert!(!error.message.contains('/'));
+    }
+
+    #[test]
+    fn external_url_validation_accepts_only_credential_free_http_destinations() {
+        assert_eq!(
+            validate_external_url("https://example.test/path?x=1")
+                .expect("valid HTTPS URL")
+                .host_str(),
+            Some("example.test")
+        );
+        for invalid in [
+            "javascript:alert(1)",
+            "file:///tmp/mail",
+            "https://user:secret@example.test/",
+            "https://",
+            "https://example.test/\nnext",
+        ] {
+            assert_eq!(
+                validate_external_url(invalid)
+                    .expect_err("invalid external URL")
+                    .code,
+                StorageErrorCode::InvalidData
+            );
+        }
     }
 }

@@ -13,16 +13,17 @@ use unimail_core::{
     CredentialRef, CredentialStore, DeleteAccountResult, DesiredReadMutation,
     DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput, DraftId, DraftSaveInput,
     DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary, DurableCheckpoint,
-    InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId, MailboxRole, MailboxUpsertInput,
-    MessageAddress, MessageAddressInput, MessageDetail, MessageDirection, MessageId,
-    MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput, MessageSummary,
-    MessageUpsertInput, MessageUpsertResult, MimeAddressRole, OfflineDraftReviewInput,
-    OfflineDraftReviewResult, OpaqueProviderCursor, OperationId, OperationLease, Provider,
-    ProviderRevision, ReadIntentGeneration, RemoteChange, RemoteMailbox, RemoteMessage,
-    RemoteMessageKey, RepositoryError, RepositoryResult, SafeErrorCode, ScheduleSyncInput,
-    SendConfirmationRequired, StorageRepository, StorageStatus, SyncBatchInput, SyncBatchResult,
-    SyncCursor, SyncCursorKey, SyncMode, SyncOperation, SyncOperationSummary, SyncStage, SyncState,
-    SyncTrigger, SyncTriggerSet, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+    InboxListInput, InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId, MailboxRole,
+    MailboxUpsertInput, MessageAddress, MessageAddressInput, MessageDetail, MessageDirection,
+    MessageId, MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput,
+    MessageSummary, MessageUpsertInput, MessageUpsertResult, MimeAddressRole,
+    OfflineDraftReviewInput, OfflineDraftReviewResult, OpaqueProviderCursor, OperationId,
+    OperationLease, Provider, ProviderRevision, ReadIntentGeneration, RemoteChange, RemoteMailbox,
+    RemoteMessage, RemoteMessageKey, RepositoryError, RepositoryResult, SafeErrorCode,
+    ScheduleSyncInput, SendConfirmationRequired, StorageRepository, StorageStatus, SyncBatchInput,
+    SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation, SyncOperationSummary,
+    SyncStage, SyncState, SyncTrigger, SyncTriggerSet, TransitionDesiredReadMutationInput,
+    TransitionSyncOperationInput,
 };
 
 use crate::{ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError};
@@ -482,6 +483,12 @@ impl StorageRepository for SqlCipherRepository {
     fn list_messages(&self, input: &MessageListInput) -> RepositoryResult<MessagePage> {
         self.store
             .with_connection(|connection| list_messages(connection, input))
+            .map_err(map_storage_error)
+    }
+
+    fn list_inbox_messages(&self, input: &InboxListInput) -> RepositoryResult<MessagePage> {
+        self.store
+            .with_connection(|connection| list_inbox_messages(connection, input))
             .map_err(map_storage_error)
     }
 
@@ -1241,6 +1248,82 @@ fn list_messages(
             params![
                 input.account_id.to_string(),
                 mailbox,
+                before_time,
+                before_id,
+                i64::from(limit) + 1,
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let mut items = rows
+        .map(|row| {
+            row.map_err(|error| StorageError::from_sql(&error))
+                .and_then(summary_from_row)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_more = items.len() > limit as usize;
+    items.truncate(limit as usize);
+    let next = if has_more {
+        items.last().map(|last| MessagePageCursor {
+            received_at_ms: last.received_at_ms,
+            message_id: last.id,
+        })
+    } else {
+        None
+    };
+    Ok(MessagePage { items, next })
+}
+
+fn list_inbox_messages(
+    connection: &Connection,
+    input: &InboxListInput,
+) -> Result<MessagePage, StorageError> {
+    let limit = input.limit.clamp(1, 100);
+    let account_id = input.account_id.map(|id| id.to_string());
+    let before_time = input.before.map(|cursor| cursor.received_at_ms);
+    let before_id = input.before.map(|cursor| cursor.message_id.to_string());
+    let mut statement = connection
+        .prepare(
+            "SELECT m.id, m.account_id, m.mailbox_id, m.subject, m.snippet,
+                    (SELECT display_name FROM message_addresses ma
+                     WHERE ma.message_id=m.id AND ma.role='from' ORDER BY position LIMIT 1),
+                    (SELECT address FROM message_addresses ma
+                     WHERE ma.message_id=m.id AND ma.role='from' ORDER BY position LIMIT 1),
+                    m.is_read, m.direction, m.sent_at_ms, m.received_at_ms,
+                    EXISTS(SELECT 1 FROM attachments x WHERE x.message_id=m.id)
+             FROM messages m
+             JOIN mailboxes mb ON mb.id=m.mailbox_id AND mb.account_id=m.account_id
+             JOIN accounts a ON a.id=m.account_id
+             WHERE mb.role='inbox'
+               AND a.enabled=1
+               AND a.deleting=0
+               AND (?1 IS NULL OR m.account_id=?1)
+               AND (?2=0 OR m.is_read=0)
+               AND (?3 IS NULL OR m.received_at_ms < ?3
+                    OR (m.received_at_ms = ?3 AND m.id < ?4))
+             ORDER BY m.received_at_ms DESC, m.id DESC LIMIT ?5",
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let rows = statement
+        .query_map(
+            params![
+                account_id,
+                input.unread_only,
                 before_time,
                 before_id,
                 i64::from(limit) + 1,
@@ -3402,14 +3485,15 @@ mod tests {
         AccountId, AddressRole, AttachmentId, AttachmentInput, ClaimDesiredReadMutationInput,
         ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, CredentialStore,
         DesiredReadMutationState, DraftAddress, DraftId, DraftSaveInput, DraftSendReviewKey,
-        DurableCheckpoint, InitialSyncLimit, LeaseId, MailboxId, MailboxRole, MailboxUpsertInput,
-        MessageAddressInput, MessageDirection, MessageId, MessageListInput, MessageReadStateInput,
-        MessageUpsertInput, MimeAddress, MimeAddressEntry, MimeAddressRole, MimeBody,
-        NormalizedMimeMessage, OfflineDraftReviewInput, OpaqueProviderCursor, OperationId,
-        OperationLease, Provider, ProviderRevision, RemoteChange, RemoteMailbox, RemoteMailboxKey,
-        RemoteMessage, RemoteMessageKey, RepositoryError, SafeErrorCode, ScheduleSyncInput,
-        StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursorKey, SyncMode, SyncState,
-        SyncTrigger, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+        DurableCheckpoint, InboxListInput, InitialSyncLimit, LeaseId, MailboxId, MailboxRole,
+        MailboxUpsertInput, MessageAddressInput, MessageDirection, MessageId, MessageListInput,
+        MessageReadStateInput, MessageUpsertInput, MimeAddress, MimeAddressEntry, MimeAddressRole,
+        MimeBody, NormalizedMimeMessage, OfflineDraftReviewInput, OpaqueProviderCursor,
+        OperationId, OperationLease, Provider, ProviderRevision, RemoteChange, RemoteMailbox,
+        RemoteMailboxKey, RemoteMessage, RemoteMessageKey, RepositoryError, SafeErrorCode,
+        ScheduleSyncInput, StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursorKey,
+        SyncMode, SyncState, SyncTrigger, TransitionDesiredReadMutationInput,
+        TransitionSyncOperationInput,
     };
 
     use super::SqlCipherRepository;
@@ -3738,6 +3822,249 @@ mod tests {
                 committed_at_ms: now_ms,
             })
             .expect("commit remote changes")
+    }
+
+    fn create_inbox_account(
+        fixture: &Fixture,
+        provider: Provider,
+        email: &str,
+        credential_ref: &str,
+        enabled: bool,
+        created_at_ms: i64,
+    ) -> (AccountId, MailboxId) {
+        let account_id = AccountId::new();
+        fixture
+            .repository
+            .create_account(AccountCreateInput {
+                id: account_id,
+                provider,
+                email: email.to_owned(),
+                display_name: None,
+                credential_ref: CredentialRef::new(credential_ref),
+                auth_state: AccountAuthState::Connected,
+                enabled,
+                created_at_ms,
+            })
+            .expect("create Inbox test account");
+        let mailbox_id = MailboxId::new();
+        fixture
+            .repository
+            .upsert_mailbox(MailboxUpsertInput {
+                id: mailbox_id,
+                account_id,
+                provider_mailbox_id: format!("{provider:?}-inbox").to_ascii_lowercase(),
+                role: MailboxRole::Inbox,
+                display_name: "收件箱".to_owned(),
+                updated_at_ms: created_at_ms,
+            })
+            .expect("create Inbox test mailbox");
+        (account_id, mailbox_id)
+    }
+
+    struct UnifiedInboxScenario {
+        fixture: Fixture,
+        first_same_time: MessageId,
+        second_same_time: MessageId,
+        outlook_message: MessageId,
+        outlook_id: AccountId,
+    }
+
+    fn seed_unified_inbox_scenario() -> UnifiedInboxScenario {
+        let fixture = fixture();
+        let first_same_time =
+            MessageId::from_str("00000000-0000-4000-8000-000000000003").expect("message id");
+        let second_same_time =
+            MessageId::from_str("00000000-0000-4000-8000-000000000002").expect("message id");
+        fixture
+            .repository
+            .upsert_message(message(
+                first_same_time,
+                fixture.account_id,
+                fixture.mailbox_id,
+                "gmail-unread",
+                "Gmail 未读",
+                10,
+            ))
+            .expect("seed first Gmail message");
+        let mut read_message = message(
+            second_same_time,
+            fixture.account_id,
+            fixture.mailbox_id,
+            "gmail-read",
+            "Gmail 已读",
+            10,
+        );
+        read_message.read = true;
+        fixture
+            .repository
+            .upsert_message(read_message)
+            .expect("seed read Gmail message");
+
+        let (outlook_id, outlook_inbox) = create_inbox_account(
+            &fixture,
+            Provider::Outlook,
+            "outlook-inbox@example.test",
+            "outlook-inbox-credential",
+            true,
+            2,
+        );
+        let outlook_message = MessageId::new();
+        fixture
+            .repository
+            .upsert_message(message(
+                outlook_message,
+                outlook_id,
+                outlook_inbox,
+                "outlook-unread",
+                "Outlook 未读",
+                11,
+            ))
+            .expect("seed Outlook message");
+        let outlook_sent = MailboxId::new();
+        fixture
+            .repository
+            .upsert_mailbox(MailboxUpsertInput {
+                id: outlook_sent,
+                account_id: outlook_id,
+                provider_mailbox_id: "outlook-sent".to_owned(),
+                role: MailboxRole::Sent,
+                display_name: "已发送".to_owned(),
+                updated_at_ms: 2,
+            })
+            .expect("create Outlook Sent");
+        fixture
+            .repository
+            .upsert_message(message(
+                MessageId::new(),
+                outlook_id,
+                outlook_sent,
+                "outlook-sent-message",
+                "不应进入收件箱",
+                20,
+            ))
+            .expect("seed Sent message");
+
+        let (disabled_id, disabled_inbox) = create_inbox_account(
+            &fixture,
+            Provider::Qq,
+            "disabled@example.test",
+            "disabled-credential",
+            false,
+            3,
+        );
+        fixture
+            .repository
+            .upsert_message(message(
+                MessageId::new(),
+                disabled_id,
+                disabled_inbox,
+                "disabled-message",
+                "禁用账户邮件",
+                30,
+            ))
+            .expect("seed disabled message");
+
+        UnifiedInboxScenario {
+            fixture,
+            first_same_time,
+            second_same_time,
+            outlook_message,
+            outlook_id,
+        }
+    }
+
+    fn inbox_ids(page: &unimail_core::MessagePage) -> Vec<MessageId> {
+        page.items.iter().map(|item| item.id).collect()
+    }
+
+    #[test]
+    fn unified_inbox_filters_accounts_read_state_and_pages_stably() {
+        let scenario = seed_unified_inbox_scenario();
+        let first = scenario
+            .fixture
+            .repository
+            .list_inbox_messages(&InboxListInput {
+                account_id: None,
+                unread_only: false,
+                before: None,
+                limit: 2,
+            })
+            .expect("first unified page");
+        assert_eq!(
+            inbox_ids(&first),
+            [scenario.outlook_message, scenario.first_same_time]
+        );
+        let second = scenario
+            .fixture
+            .repository
+            .list_inbox_messages(&InboxListInput {
+                account_id: None,
+                unread_only: false,
+                before: first.next,
+                limit: 2,
+            })
+            .expect("second unified page");
+        assert_eq!(inbox_ids(&second), [scenario.second_same_time]);
+        assert!(second.next.is_none());
+
+        let unread = scenario
+            .fixture
+            .repository
+            .list_inbox_messages(&InboxListInput {
+                account_id: None,
+                unread_only: true,
+                before: None,
+                limit: 100,
+            })
+            .expect("unread unified page");
+        assert_eq!(
+            inbox_ids(&unread),
+            [scenario.outlook_message, scenario.first_same_time]
+        );
+
+        let gmail = scenario
+            .fixture
+            .repository
+            .list_inbox_messages(&InboxListInput {
+                account_id: Some(scenario.fixture.account_id),
+                unread_only: false,
+                before: None,
+                limit: 100,
+            })
+            .expect("Gmail Inbox page");
+        assert_eq!(
+            inbox_ids(&gmail),
+            [scenario.first_same_time, scenario.second_same_time]
+        );
+
+        scenario
+            .fixture
+            .repository
+            .store
+            .with_connection(|connection| {
+                connection
+                    .execute(
+                        "UPDATE accounts SET deleting=1 WHERE id=?1",
+                        [scenario.outlook_id.to_string()],
+                    )
+                    .map_err(|error| crate::StorageError::from_sql(&error))?;
+                Ok(())
+            })
+            .expect("mark Outlook account deleting");
+        let after_delete_started = scenario
+            .fixture
+            .repository
+            .list_inbox_messages(&InboxListInput {
+                account_id: None,
+                unread_only: false,
+                before: None,
+                limit: 100,
+            })
+            .expect("unified page hides deleting account");
+        assert_eq!(
+            inbox_ids(&after_delete_started),
+            [scenario.first_same_time, scenario.second_same_time]
+        );
     }
 
     #[test]

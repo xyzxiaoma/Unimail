@@ -227,10 +227,21 @@ pub(crate) struct OAuthSessionManager {
     credentials: Arc<dyn CredentialStore>,
     registry: Arc<dyn AccountRegistry>,
     scheduler: Arc<dyn InitialSyncScheduler>,
+    coordinator: Option<Arc<SyncCoordinator>>,
     browser: Arc<dyn BrowserOpener>,
     status: Mutex<OAuthOnboardingStatus>,
     active: Mutex<Option<ActiveFlow>>,
     start_lock: tokio::sync::Mutex<()>,
+}
+
+struct OAuthSessionDependencies {
+    authenticator: Arc<dyn DesktopAuthenticator>,
+    accounts: Arc<dyn AccountBackend>,
+    credentials: Arc<dyn CredentialStore>,
+    registry: Arc<dyn AccountRegistry>,
+    scheduler: Arc<dyn InitialSyncScheduler>,
+    coordinator: Option<Arc<SyncCoordinator>>,
+    browser: Arc<dyn BrowserOpener>,
 }
 
 impl OAuthSessionManager {
@@ -252,34 +263,33 @@ impl OAuthSessionManager {
         let registry: Arc<dyn AccountRegistry> = registry;
         Self::from_parts(
             config,
-            authenticator,
-            Arc::clone(&accounts),
-            credentials,
-            Arc::clone(&registry),
-            Arc::new(CoordinatorScheduler::new(coordinator, registry)),
-            browser,
+            OAuthSessionDependencies {
+                authenticator,
+                accounts: Arc::clone(&accounts),
+                credentials,
+                registry: Arc::clone(&registry),
+                scheduler: Arc::new(CoordinatorScheduler::new(
+                    Arc::clone(&coordinator),
+                    registry,
+                )),
+                coordinator: Some(coordinator),
+                browser,
+            },
         )
     }
 
-    fn from_parts(
-        config: OAuthSessionConfig,
-        authenticator: Arc<dyn DesktopAuthenticator>,
-        accounts: Arc<dyn AccountBackend>,
-        credentials: Arc<dyn CredentialStore>,
-        registry: Arc<dyn AccountRegistry>,
-        scheduler: Arc<dyn InitialSyncScheduler>,
-        browser: Arc<dyn BrowserOpener>,
-    ) -> Self {
+    fn from_parts(config: OAuthSessionConfig, dependencies: OAuthSessionDependencies) -> Self {
         Self {
             provider: config.provider,
             redirect_host: config.redirect_host,
             configured: config.configured,
-            authenticator,
-            accounts,
-            credentials,
-            registry,
-            scheduler,
-            browser,
+            authenticator: dependencies.authenticator,
+            accounts: dependencies.accounts,
+            credentials: dependencies.credentials,
+            registry: dependencies.registry,
+            scheduler: dependencies.scheduler,
+            coordinator: dependencies.coordinator,
+            browser: dependencies.browser,
             status: Mutex::new(OAuthOnboardingStatus::initial(
                 config.provider,
                 config.configured,
@@ -287,6 +297,10 @@ impl OAuthSessionManager {
             active: Mutex::new(None),
             start_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    pub(crate) fn sync_coordinator(&self) -> Option<Arc<SyncCoordinator>> {
+        self.coordinator.clone()
     }
 
     pub(crate) fn status(&self) -> OAuthOnboardingStatus {
@@ -1035,12 +1049,15 @@ mod tests {
                 redirect_host: RedirectHost::Ipv4Loopback,
                 configured,
             },
-            Arc::new(FakeAuthenticator::default()),
-            accounts,
-            Arc::new(FakeCredentials::default()),
-            Arc::new(FakeRegistry),
-            scheduler,
-            browser,
+            OAuthSessionDependencies {
+                authenticator: Arc::new(FakeAuthenticator::default()),
+                accounts,
+                credentials: Arc::new(FakeCredentials::default()),
+                registry: Arc::new(FakeRegistry),
+                scheduler,
+                coordinator: None,
+                browser,
+            },
         ))
     }
 

@@ -5,6 +5,7 @@ mod ids;
 mod mime;
 mod onboarding;
 mod provider;
+mod reader;
 mod storage;
 
 use serde::Serialize;
@@ -16,7 +17,7 @@ pub use domain::{
     ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, DeleteAccountResult,
     DesiredReadMutation, DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput,
     DraftSaveInput, DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary,
-    LeaseRecoveryResult, Mailbox, MailboxRole, MailboxUpsertInput, MessageAddress,
+    InboxListInput, LeaseRecoveryResult, Mailbox, MailboxRole, MailboxUpsertInput, MessageAddress,
     MessageAddressInput, MessageDetail, MessageDirection, MessageListInput, MessagePage,
     MessagePageCursor, MessageReadStateInput, MessageSummary, MessageUpsertInput,
     MessageUpsertResult, OfflineDraftReviewInput, OfflineDraftReviewResult, OperationLease,
@@ -45,6 +46,11 @@ pub use provider::{
     RemoteMailbox, RemoteMailboxKey, RemoteMessage, RemoteMessageKey, RetryHint, SafeRequestId,
     SendOutcome, SendRequest, SensitiveString, SetReadRequest, StartLoginRequest, SyncPage,
     SyncPageState, UnknownSend,
+};
+pub use reader::{
+    AssignReadStateResultV1, InboxMessageSummaryV1, InboxPageRequestV1, InboxPageV1,
+    MessageAddressV1, MessageDetailV1, ReaderAttachmentV1, RemoteImageResultV1,
+    decode_inbox_cursor, encode_inbox_cursor,
 };
 pub use storage::{
     CredentialStore, CredentialStoreError, CredentialStoreKind, RepositoryError, RepositoryResult,
