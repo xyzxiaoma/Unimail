@@ -87,6 +87,9 @@ jobs:
         run: npm run ci:validate
       - name: 构建未签名发布候选
         run: npm run tauri build
+      - name: 验证原生应用可启动
+        shell: pwsh
+        run: ./scripts/check-native-startup.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-${{ github.ref_name }}
