@@ -1,1 +1,12 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Preserve Rust/Tauri ownership and dependency direction while adding security boundaries."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Apply SQLCipher, cleanup, attachment transfer, and repository contracts to file-permission hardening."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Define generated, non-sensitive diagnostics and safe command failure behavior."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Keep runtime output, telemetry, mail content, credentials, and paths out of diagnostics."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Re-audit OAuth, TLS, fixed endpoints, provider payload bounds, and credential redaction."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Integrate deterministic security, advisory, license, and workspace quality gates."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Preserve semantic Chinese UI and isolated hostile-mail rendering."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Add generated diagnostics with strict unknown-payload decoding and sensitive-field rejection."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Cover security UI, malicious corpus, lint, tests, build, and binding checks."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace security data from storage/provider state through IPC decoding into the UI."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse URL, raster data, error, and policy validators rather than duplicating security logic."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/core-architecture.md","reason":"Use the parent threat model, Tauri, SQLCipher, credential, HTML isolation, and security gate research."}

@@ -1,1 +1,10 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify owner-only files, symlink safety, SQLCipher sidecars, cleanup, and no unrelated-file mutation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify diagnostic DTOs and commands contain only fixed safe fields and failures."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no runtime output, telemetry, credentials, mail content, identifiers, or local paths."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Verify OAuth, TLS, endpoints, remote-image/provider network policy, and safe errors remain intact."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify security, advisory, license, formatting, Clippy, and workspace test gates."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify diagnostics accessibility and hostile-mail sandbox/CSP behavior."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify generated bindings, strict runtime decoders, count invariants, and sensitive-field rejection."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify frontend tests, lint, typecheck, production build, and malicious corpus coverage."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review capability, navigation, storage, IPC, decoder, and UI security flow end to end."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/core-architecture.md","reason":"Cross-check the implemented V1 threat controls against the approved architecture research."}

@@ -3,7 +3,7 @@
   "name": "security-hardening",
   "title": "Security Hardening",
   "description": "Audit and harden capabilities, credentials, HTML, network, files, logs, dependencies, and privacy diagnostics.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
