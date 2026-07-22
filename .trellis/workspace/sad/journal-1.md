@@ -330,3 +330,36 @@ Implemented durable local drafts, plain-text compose and reply, explicit offline
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Refresh Trellis V1 architecture guidance
+
+**Date**: 2026-07-22
+**Task**: Refresh Trellis V1 architecture guidance
+**Branch**: `main`
+
+### Summary
+
+Updated backend and frontend Trellis specs from the implemented V1 codebase, verified formatting, links, frontend tests, bindings, security, build, Clippy, and workspace tests, then archived the bootstrap task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1f35dce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

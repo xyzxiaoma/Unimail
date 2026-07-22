@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~332 | Active |
+| `journal-1.md` | ~365 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-22 | Refresh Trellis V1 architecture guidance | `1f35dce` | `main` |
 | 9 | 2026-07-22 | 完成安全加固与原生启动验收 | `e929183`, `e52e159`, `766abaa`, `61ce6f4`, `45629f5` | `main` |
 | 8 | 2026-07-22 | Compose drafts reply send and Sent reconciliation | `32f4df5`, `008edb9`, `2c12d76` | `main` |
 | 7 | 2026-07-22 | Complete unified Inbox and secure reader | `d8de19a`, `5002cc5`, `b2b4b98` | `main` |
