@@ -3,7 +3,7 @@
   "name": "release-integration",
   "title": "Release Integration",
   "description": "Complete native push builds, tag Releases, signing/notarization, updater metadata, installers, and final acceptance.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

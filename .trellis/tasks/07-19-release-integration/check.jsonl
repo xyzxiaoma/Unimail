@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/07-19-implement-unimail-v1/prd.md", "reason": "Verify the child satisfies authoritative release acceptance requirements."}
+{"file": ".trellis/tasks/07-19-implement-unimail-v1/design.md", "reason": "Verify release transaction, signing fallback, and updater-disabled boundaries."}
+{"file": ".trellis/tasks/07-19-implement-unimail-v1/research/release-ci.md", "reason": "Review native signing, notarization, provenance, and failure handling against research."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run required native/security/dependency quality gates."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Ensure release scripts and failures never expose Secrets or local paths."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace version, tag, notes, provenance, assets, and publication end to end."}
