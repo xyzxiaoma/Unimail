@@ -32,7 +32,9 @@ npm run check:bindings
 
 `npm run ci:validate` composes frontend checks, binding drift, Rust format, Clippy, and
 workspace tests. `npm run tauri build` is the desktop packaging check when platform
-prerequisites are available.
+prerequisites are available. Every Windows/macOS package build must then run
+`pwsh -File scripts/check-native-startup.ps1`; artifact upload is allowed only after the packaged
+native executable remains alive through the bounded smoke window.
 
 ## Testing Requirements
 
@@ -46,6 +48,9 @@ prerequisites are available.
 - Tauri command logic should remain thin. Pure adapter mapping is covered by unit tests in the
   Tauri library; platform setup, native credential prompts, and command round trips still require
   native build or end-to-end verification.
+- `rustls-no-provider` clients require the desktop composition root to install the reviewed ring
+  provider before any Reqwest, OAuth, Graph, Gmail, IMAP, or remote-image client is constructed.
+  Packaging alone does not execute this path, so native startup smoke tests are mandatory.
 
 ## Generated Binding Rule
 
@@ -77,6 +82,71 @@ the diff, and retain frontend runtime decoding because the transport result rema
 - Do all required commands pass without warnings?
 - Does a user-visible change include a Simplified Chinese `未发布` changelog entry?
 - Does `npm run check:paths` still reject generated/sensitive local artifacts?
+
+## Scenario: packaged native startup verification
+
+### 1. Scope / Trigger
+
+Apply whenever desktop composition, Tauri plugins/windows, TLS/HTTP initialization, native storage,
+or package workflows change. A successful compile or installer build is not evidence that the native
+application can finish runtime initialization.
+
+### 2. Signatures
+
+```text
+install_rustls_crypto_provider() -> ()
+pwsh -File scripts/check-native-startup.ps1
+```
+
+### 3. Contracts
+
+- `unimail_lib::run()` installs the reviewed ring provider before constructing Tauri plugins,
+  OAuth runtimes, provider clients, or any other Reqwest/rustls consumer.
+- Provider installation is process-wide and idempotent for repeated test/feature calls.
+- The startup script resolves the packaged executable for the current Windows/macOS runner, launches
+  it from its package directory, and requires it to remain alive for five seconds.
+- A passing smoke check stops the process it created. An early exit fails with the exit code and
+  captured stdout/stderr; those streams must remain free of credentials and private mail data.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Reqwest client is built before a rustls provider is installed | Regression test or native smoke fails |
+| Packaged executable is absent | Startup script fails with the required build instruction |
+| Native process exits inside the smoke window | Workflow fails before artifact upload |
+| Native process remains alive through the smoke window | Script reports success and terminates only its own process |
+| Unsupported runner platform invokes the script | Script fails rather than guessing an executable path |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Windows and macOS build, launch the packaged executable, keep it alive for five seconds, then
+  upload the unsigned artifact.
+- Base: unit tests call the idempotent setup helper before constructing focused HTTP clients.
+- Bad: CI uploads an installer immediately after `tauri build`, or a feature path installs the crypto
+  provider only after another startup component may already construct Reqwest.
+
+### 6. Tests Required
+
+- Unit test: call desktop crypto setup, assert a default provider exists, and build a Reqwest client.
+- Local/native test: run `npm run tauri build`, then `pwsh -File scripts/check-native-startup.ps1`.
+- CI: run the startup script on both Windows and macOS after package build and before artifact upload.
+- Failure review: confirm early-exit diagnostics are fixed/runtime-safe and contain no sensitive data.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: packaging succeeds, but the first Reqwest constructor can panic at runtime.
+pub fn run() {
+    tauri::Builder::default().run(/* ... */);
+}
+
+// Correct: establish process-wide TLS crypto before any HTTP-dependent runtime exists.
+pub fn run() {
+    install_rustls_crypto_provider();
+    tauri::Builder::default().run(/* ... */);
+}
+```
 
 ## Scenario: deterministic security and dependency gate
 
