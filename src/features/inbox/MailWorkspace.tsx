@@ -11,11 +11,17 @@ import { mailReaderContent } from "../../content/mail-reader.zh-CN";
 import { openExternalLink } from "../../lib/ipc/external-link";
 import type { ConnectedAccountSummary } from "../../lib/ipc/oauth-onboarding";
 import {
+  beginMailAttachmentDownload,
+  cancelMailAttachmentDownload,
+  getMailAttachmentDownloadStatus,
   getInboxPage,
   getMailMessageDetail,
+  getSearchPage,
   setMailMessageRead,
+  type AttachmentDownloadSnapshotV1,
   type InboxMessageSummaryV1,
   type InboxPageV1,
+  type MessageDetailV1,
 } from "../../lib/ipc/mail-reader";
 import { SafeHtmlMessage } from "../reader/SafeHtmlMessage";
 
@@ -34,6 +40,85 @@ function displayTime(timestamp: string): string {
 
 function senderLabel(message: InboxMessageSummaryV1): string {
   return message.senderName ?? message.senderAddress ?? "未知发件人";
+}
+
+function displaySize(value: string | null): string {
+  if (value === null) return mailReaderContent.unknownSize;
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return mailReaderContent.unknownSize;
+  if (bytes < 1024) return `${String(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentAction({ attachment }: { attachment: MessageDetailV1["attachments"][number] }) {
+  const [operation, setOperation] = useState<AttachmentDownloadSnapshotV1 | null>(null);
+  const [failed, setFailed] = useState(false);
+  const begin = useMutation({
+    mutationFn: () => beginMailAttachmentDownload(attachment.id),
+    onSuccess: (snapshot) => {
+      setFailed(false);
+      setOperation(snapshot);
+    },
+    onError: () => setFailed(true),
+  });
+  const status = useQuery({
+    queryKey: ["attachment-download", operation?.operationId],
+    queryFn: () => getMailAttachmentDownloadStatus(operation?.operationId ?? ""),
+    enabled: operation?.state === "downloading",
+    refetchInterval: (query) =>
+      query.state.data?.state === "downloading" || query.state.data === undefined ? 300 : false,
+  });
+  const current = status.data ?? operation;
+
+  const progress = (() => {
+    if (!current || current.state !== "downloading") return null;
+    const written = Number(current.bytesWritten);
+    const total = current.totalBytes === null ? null : Number(current.totalBytes);
+    if (
+      !Number.isSafeInteger(written) ||
+      total === null ||
+      !Number.isSafeInteger(total) ||
+      total <= 0
+    ) {
+      return mailReaderContent.downloadingAttachment;
+    }
+    return mailReaderContent.attachmentProgress(Math.min(100, Math.round((written / total) * 100)));
+  })();
+  const errorMessage =
+    current?.error?.message ??
+    (failed || status.isError ? mailReaderContent.attachmentFailed : null);
+
+  return (
+    <li>
+      <div>
+        <strong>{attachment.fileName ?? mailReaderContent.unnamedAttachment}</strong>
+        <small>{displaySize(attachment.sizeBytes)}</small>
+      </div>
+      {current?.state === "downloading" ? (
+        <button
+          type="button"
+          onClick={() => {
+            void cancelMailAttachmentDownload(current.operationId)
+              .then(setOperation)
+              .catch(() => setFailed(true));
+          }}
+        >
+          {progress} · {mailReaderContent.cancelDownload}
+        </button>
+      ) : (
+        <button type="button" disabled={begin.isPending} onClick={() => begin.mutate()}>
+          {begin.isPending
+            ? mailReaderContent.preparingDownload
+            : current?.state === "completed"
+              ? mailReaderContent.savedAttachment
+              : mailReaderContent.saveAttachment}
+        </button>
+      )}
+      {current?.state === "cancelled" && <span>{mailReaderContent.downloadCancelled}</span>}
+      {errorMessage && <span role="alert">{errorMessage}</span>}
+    </li>
+  );
 }
 
 function ReaderPane({
@@ -119,7 +204,7 @@ function ReaderPane({
             <h3 id="attachment-heading">附件（{message.attachments.length}）</h3>
             <ul>
               {message.attachments.map((attachment) => (
-                <li key={attachment.id}>{attachment.fileName ?? "未命名附件"}</li>
+                <AttachmentAction key={attachment.id} attachment={attachment} />
               ))}
             </ul>
           </section>
@@ -142,6 +227,8 @@ export function MailWorkspace({
 }) {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [externalUrl, setExternalUrl] = useState<string | null>(null);
   const [externalLinkError, setExternalLinkError] = useState(false);
@@ -156,14 +243,37 @@ export function MailWorkspace({
       getInboxPage({ accountId, unreadOnly, cursor: pageParam, limit: PAGE_SIZE }),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(searchInput.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+  const searching = searchQuery.length > 0;
+  const search = useInfiniteQuery({
+    queryKey: ["mail-search", searchQuery, accountId, unreadOnly],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      getSearchPage({
+        query: searchQuery,
+        accountId,
+        unreadOnly,
+        cursor: pageParam,
+        limit: PAGE_SIZE,
+      }),
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+    enabled: searching,
+  });
   const messages = useMemo(() => {
     const seen = new Set<string>();
-    return (
-      inbox.data?.pages
-        .flatMap((page) => page.items)
-        .filter((message) => (seen.has(message.id) ? false : (seen.add(message.id), true))) ?? []
-    );
-  }, [inbox.data]);
+    const items = searching
+      ? (search.data?.pages.flatMap((page) =>
+          page.items.map((hit) => ({
+            ...hit.summary,
+            snippet: hit.matchContext ?? hit.summary.snippet,
+          })),
+        ) ?? [])
+      : (inbox.data?.pages.flatMap((page) => page.items) ?? []);
+    return items.filter((message) => (seen.has(message.id) ? false : (seen.add(message.id), true)));
+  }, [inbox.data, search.data, searching]);
   const accountsById = useMemo(
     () => new Map(accounts.map((account) => [account.id, account])),
     [accounts],
@@ -177,14 +287,16 @@ export function MailWorkspace({
     overscan: 6,
   });
   const virtualItems = virtualizer.getVirtualItems();
-  const fetchNextPage = inbox.fetchNextPage;
+  const activeHasNextPage = searching ? search.hasNextPage : inbox.hasNextPage;
+  const activeIsFetchingNextPage = searching ? search.isFetchingNextPage : inbox.isFetchingNextPage;
   const requestNextPage = useCallback(() => {
-    if (!inbox.hasNextPage || nextPageInFlightRef.current) return;
+    if (!activeHasNextPage || nextPageInFlightRef.current) return;
     nextPageInFlightRef.current = true;
-    void fetchNextPage().finally(() => {
+    const request = searching ? search.fetchNextPage() : inbox.fetchNextPage();
+    void request.finally(() => {
       nextPageInFlightRef.current = false;
     });
-  }, [fetchNextPage, inbox.hasNextPage]);
+  }, [activeHasNextPage, inbox, search, searching]);
   const readMutation = useMutation({
     mutationFn: (messageId: string) => setMailMessageRead(messageId, true),
     onMutate: async (messageId) => {
@@ -208,6 +320,9 @@ export function MailWorkspace({
     },
     onError: (_error, _messageId, context) => {
       if (context?.previous) queryClient.setQueryData(context.key, context.previous);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["mail-search"] });
     },
   });
   const mutateRead = readMutation.mutate;
@@ -241,13 +356,13 @@ export function MailWorkspace({
       if (!next) return;
       event.preventDefault();
       setSelectedId(next.id);
-      if (nextIndex >= messages.length - 3 && inbox.hasNextPage && !inbox.isFetchingNextPage) {
+      if (nextIndex >= messages.length - 3 && activeHasNextPage && !activeIsFetchingNextPage) {
         requestNextPage();
       }
     };
     window.addEventListener("keydown", handleKeys);
     return () => window.removeEventListener("keydown", handleKeys);
-  }, [inbox.hasNextPage, inbox.isFetchingNextPage, messages, requestNextPage, selectedId]);
+  }, [activeHasNextPage, activeIsFetchingNextPage, messages, requestNextPage, selectedId]);
 
   useEffect(() => {
     const target = sentinelRef.current;
@@ -255,20 +370,23 @@ export function MailWorkspace({
     const observer = new IntersectionObserver((entries) => {
       if (
         entries.some((entry) => entry.isIntersecting) &&
-        inbox.hasNextPage &&
-        !inbox.isFetchingNextPage
+        activeHasNextPage &&
+        !activeIsFetchingNextPage
       ) {
         requestNextPage();
       }
     });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [inbox.hasNextPage, inbox.isFetchingNextPage, requestNextPage]);
+  }, [activeHasNextPage, activeIsFetchingNextPage, requestNextPage]);
 
   const listRows =
     virtualItems.length > 0
       ? virtualItems
       : messages.map((_, index) => ({ index, start: index * 92, size: 92, key: index }));
+  const activeLoading = searching ? search.isLoading : inbox.isLoading;
+  const activeError = searching ? search.isError : inbox.isError;
+  const retryActive = () => (searching ? search.refetch() : inbox.refetch());
   return (
     <>
       <section className="message-pane" aria-labelledby="inbox-heading">
@@ -322,20 +440,57 @@ export function MailWorkspace({
           </div>
           <span className="cache-label">{mailReaderContent.cached}</span>
         </div>
-        {inbox.isLoading ? (
-          <div className="inbox-status">{mailReaderContent.loading}</div>
-        ) : inbox.isError && messages.length === 0 ? (
+        <div className="search-row">
+          <label htmlFor="mail-search">{mailReaderContent.searchLabel}</label>
+          <input
+            id="mail-search"
+            type="search"
+            value={searchInput}
+            placeholder={mailReaderContent.searchPlaceholder}
+            onChange={(event) => {
+              setSearchInput(event.target.value);
+              setSelectedId(null);
+            }}
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchInput("");
+                setSearchQuery("");
+                setSelectedId(null);
+              }}
+            >
+              {mailReaderContent.clearSearch}
+            </button>
+          )}
+        </div>
+        {activeLoading ? (
           <div className="inbox-status">
-            <p>{mailReaderContent.unavailable}</p>
-            <button type="button" onClick={() => void inbox.refetch()}>
+            {searching ? mailReaderContent.searching : mailReaderContent.loading}
+          </div>
+        ) : activeError && messages.length === 0 ? (
+          <div className="inbox-status">
+            <p>{searching ? mailReaderContent.searchUnavailable : mailReaderContent.unavailable}</p>
+            <button type="button" onClick={() => void retryActive()}>
               {mailReaderContent.retry}
             </button>
           </div>
         ) : messages.length === 0 ? (
           <div className="empty-list">
-            <h2>{unreadOnly ? mailReaderContent.emptyUnread : mailReaderContent.empty}</h2>
-            <p>{mailReaderContent.emptyDescription}</p>
-            {accounts.length === 0 && (
+            <h2>
+              {searching
+                ? mailReaderContent.noSearchResults
+                : unreadOnly
+                  ? mailReaderContent.emptyUnread
+                  : mailReaderContent.empty}
+            </h2>
+            <p>
+              {searching
+                ? mailReaderContent.noSearchResultsDescription
+                : mailReaderContent.emptyDescription}
+            </p>
+            {!searching && accounts.length === 0 && (
               <button
                 className="secondary-action"
                 onClick={(event) => onAddAccount(event.currentTarget)}
@@ -392,10 +547,12 @@ export function MailWorkspace({
               })}
             </div>
             <div ref={sentinelRef} className="load-more-sentinel" />
-            {inbox.isFetchingNextPage && (
-              <p className="load-more-state">{mailReaderContent.loadingMore}</p>
+            {activeIsFetchingNextPage && (
+              <p className="load-more-state">
+                {searching ? mailReaderContent.loadingMoreSearch : mailReaderContent.loadingMore}
+              </p>
             )}
-            {inbox.isError && messages.length > 0 && (
+            {activeError && messages.length > 0 && (
               <button className="load-more-retry" type="button" onClick={requestNextPage}>
                 {mailReaderContent.retry}
               </button>

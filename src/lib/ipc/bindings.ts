@@ -46,6 +46,20 @@ export type MessageDetailV1 = { summary: InboxMessageSummaryV1, threadId: string
 
 export type AssignReadStateResultV1 = { messageId: string, read: boolean, generation: string, };
 
+export type AttachmentDownloadErrorCode = "attachment_not_found" | "attachment_unavailable" | "account_unavailable" | "offline" | "destination_collision" | "attachment_too_large" | "download_cancelled" | "provider_failed" | "write_failed" | "verification_failed" | "storage_unavailable" | "internal";
+
+export type AttachmentDownloadCommandError = { code: AttachmentDownloadErrorCode, message: string, retryable: boolean, };
+
+export type AttachmentDownloadStateV1 = "downloading" | "completed" | "cancelled" | "failed";
+
+export type AttachmentDownloadSnapshotV1 = { operationId: string, attachmentId: string, state: AttachmentDownloadStateV1, bytesWritten: string, totalBytes: string | null, error: AttachmentDownloadCommandError | null, };
+
+export type SearchPageRequestV1 = { query: string, accountId: string | null, unreadOnly: boolean, cursor: string | null, limit: number, };
+
+export type SearchMessageHitV1 = { summary: InboxMessageSummaryV1, matchContext: string | null, };
+
+export type SearchPageV1 = { items: Array<SearchMessageHitV1>, nextCursor: string | null, };
+
 export type ComposeCommandErrorCode = "invalid_data" | "not_found" | "revision_conflict" | "account_unavailable" | "empty_subject_confirmation_required" | "offline_review_confirmation_required" | "send_locked" | "storage_unavailable" | "internal";
 
 export type ComposeCommandError = { code: ComposeCommandErrorCode, message: string, retryable: boolean, };
@@ -112,6 +126,22 @@ export function getMessageDetail(messageId: string): Promise<unknown> {
 
 export function assignMessageReadState(messageId: string, read: boolean): Promise<unknown> {
   return invoke("assign_message_read_state", { messageId, read });
+}
+
+export function searchInboxMessages(request: SearchPageRequestV1): Promise<unknown> {
+  return invoke("search_inbox_messages", { request });
+}
+
+export function beginAttachmentDownload(attachmentId: string): Promise<unknown> {
+  return invoke("begin_attachment_download", { attachmentId });
+}
+
+export function getAttachmentDownloadStatus(operationId: string): Promise<unknown> {
+  return invoke("get_attachment_download_status", { operationId });
+}
+
+export function cancelAttachmentDownload(operationId: string): Promise<unknown> {
+  return invoke("cancel_attachment_download", { operationId });
 }
 
 export function listDrafts(accountId: string | null): Promise<unknown> {

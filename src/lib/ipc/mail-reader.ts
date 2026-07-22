@@ -1,10 +1,18 @@
 import {
   assignMessageReadState,
+  beginAttachmentDownload,
+  cancelAttachmentDownload,
   fetchMessageRemoteImage,
+  getAttachmentDownloadStatus,
   getMessageDetail,
   listInboxMessages,
+  searchInboxMessages,
   type AddressRole,
   type AssignReadStateResultV1,
+  type AttachmentDownloadCommandError,
+  type AttachmentDownloadErrorCode,
+  type AttachmentDownloadSnapshotV1,
+  type AttachmentDownloadStateV1,
   type InboxMessageSummaryV1,
   type InboxPageRequestV1,
   type InboxPageV1,
@@ -13,16 +21,22 @@ import {
   type MessageDirection,
   type ReaderAttachmentV1,
   type RemoteImageResultV1,
+  type SearchPageRequestV1,
+  type SearchPageV1,
 } from "./bindings";
 import { isNullableString, isRecord, isUint32, isUnsignedIntegerString, isUuid } from "./decode";
 
 export type {
   AssignReadStateResultV1,
+  AttachmentDownloadCommandError,
+  AttachmentDownloadSnapshotV1,
   InboxMessageSummaryV1,
   InboxPageRequestV1,
   InboxPageV1,
   MessageDetailV1,
   RemoteImageResultV1,
+  SearchPageRequestV1,
+  SearchPageV1,
 } from "./bindings";
 
 const addressRoles = new Set<AddressRole>(["from", "sender", "to", "cc", "bcc", "reply_to"]);
@@ -30,6 +44,26 @@ const messageDirections = new Set<MessageDirection>(["incoming", "outgoing"]);
 const remoteImageDataUrlPattern = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/u;
 const remoteImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const maxRemoteImageDataUrlLength = 2_800_000;
+const attachmentStates = new Set<AttachmentDownloadStateV1>([
+  "downloading",
+  "completed",
+  "cancelled",
+  "failed",
+]);
+const attachmentErrorContracts = {
+  attachment_not_found: ["未找到这个附件。", false],
+  attachment_unavailable: ["这个附件暂时无法下载。", false],
+  account_unavailable: ["该邮箱账户当前不可用，请重新连接后重试。", false],
+  offline: ["当前处于离线状态，无法下载附件。", true],
+  destination_collision: ["目标位置已有同名文件，请选择其他名称。", true],
+  attachment_too_large: ["附件超过当前允许的下载大小。", false],
+  download_cancelled: ["附件下载已取消。", false],
+  provider_failed: ["邮箱服务未能下载附件，请稍后重试。", true],
+  write_failed: ["无法将附件写入所选位置。", true],
+  verification_failed: ["附件完整性校验失败，请重新下载。", false],
+  storage_unavailable: ["本地邮件存储暂时不可用。", true],
+  internal: ["附件下载发生错误，请稍后重试。", true],
+} as const satisfies Record<AttachmentDownloadErrorCode, readonly [string, boolean]>;
 
 function decodeMessageSummary(value: unknown): InboxMessageSummaryV1 {
   if (!isRecord(value)) {
@@ -129,6 +163,75 @@ export function decodeInboxPage(value: unknown): InboxPageV1 {
   };
 }
 
+export function decodeSearchPage(value: unknown): SearchPageV1 {
+  if (!isRecord(value) || !Array.isArray(value.items) || !isNullableString(value.nextCursor)) {
+    throw new TypeError("搜索分页返回了无效数据");
+  }
+  return {
+    items: value.items.map((item) => {
+      if (!isRecord(item) || !isNullableString(item.matchContext)) {
+        throw new TypeError("搜索结果包含无效字段");
+      }
+      return {
+        summary: decodeMessageSummary(item.summary),
+        matchContext: item.matchContext,
+      };
+    }),
+    nextCursor: value.nextCursor,
+  };
+}
+
+export function decodeAttachmentDownloadError(value: unknown): AttachmentDownloadCommandError {
+  if (!isRecord(value)) {
+    throw new TypeError("附件下载错误必须为对象");
+  }
+  const { code, message, retryable } = value;
+  if (typeof code !== "string" || !(code in attachmentErrorContracts)) {
+    throw new TypeError("附件下载错误代码无效");
+  }
+  const typedCode = code as AttachmentDownloadErrorCode;
+  const contract = attachmentErrorContracts[typedCode];
+  if (
+    typeof message !== "string" ||
+    typeof retryable !== "boolean" ||
+    message !== contract[0] ||
+    retryable !== contract[1]
+  ) {
+    throw new TypeError("附件下载错误契约无效");
+  }
+  return { code: typedCode, message, retryable };
+}
+
+export function decodeAttachmentDownloadSnapshot(value: unknown): AttachmentDownloadSnapshotV1 {
+  if (!isRecord(value)) {
+    throw new TypeError("附件下载状态必须为对象");
+  }
+  const { operationId, attachmentId, state, bytesWritten, totalBytes, error } = value;
+  if (
+    !isUuid(operationId) ||
+    !isUuid(attachmentId) ||
+    typeof state !== "string" ||
+    !attachmentStates.has(state as AttachmentDownloadStateV1) ||
+    !isUnsignedIntegerString(bytesWritten) ||
+    !(totalBytes === null || isUnsignedIntegerString(totalBytes))
+  ) {
+    throw new TypeError("附件下载状态包含无效字段");
+  }
+  const typedState = state as AttachmentDownloadStateV1;
+  const decodedError = error === null ? null : decodeAttachmentDownloadError(error);
+  if ((typedState === "failed") !== (decodedError !== null)) {
+    throw new TypeError("附件下载状态与错误不一致");
+  }
+  return {
+    operationId,
+    attachmentId,
+    state: typedState,
+    bytesWritten,
+    totalBytes,
+    error: decodedError,
+  };
+}
+
 export function decodeMessageDetail(value: unknown): MessageDetailV1 {
   if (!isRecord(value)) {
     throw new TypeError("邮件详情必须为对象");
@@ -202,6 +305,29 @@ export function decodeRemoteImageResult(value: unknown): RemoteImageResultV1 {
 
 export async function getInboxPage(request: InboxPageRequestV1): Promise<InboxPageV1> {
   return decodeInboxPage(await listInboxMessages(request));
+}
+
+export async function getSearchPage(request: SearchPageRequestV1): Promise<SearchPageV1> {
+  return decodeSearchPage(await searchInboxMessages(request));
+}
+
+export async function beginMailAttachmentDownload(
+  attachmentId: string,
+): Promise<AttachmentDownloadSnapshotV1 | null> {
+  const value = await beginAttachmentDownload(attachmentId);
+  return value === null ? null : decodeAttachmentDownloadSnapshot(value);
+}
+
+export async function getMailAttachmentDownloadStatus(
+  operationId: string,
+): Promise<AttachmentDownloadSnapshotV1> {
+  return decodeAttachmentDownloadSnapshot(await getAttachmentDownloadStatus(operationId));
+}
+
+export async function cancelMailAttachmentDownload(
+  operationId: string,
+): Promise<AttachmentDownloadSnapshotV1> {
+  return decodeAttachmentDownloadSnapshot(await cancelAttachmentDownload(operationId));
 }
 
 export async function getMailMessageDetail(messageId: string): Promise<MessageDetailV1> {

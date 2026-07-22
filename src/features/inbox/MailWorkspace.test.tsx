@@ -2,12 +2,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openExternalLink } from "../../lib/ipc/external-link";
-import { getInboxPage, getMailMessageDetail, setMailMessageRead } from "../../lib/ipc/mail-reader";
+import {
+  beginMailAttachmentDownload,
+  cancelMailAttachmentDownload,
+  getInboxPage,
+  getMailAttachmentDownloadStatus,
+  getMailMessageDetail,
+  getSearchPage,
+  setMailMessageRead,
+} from "../../lib/ipc/mail-reader";
 import { MailWorkspace } from "./MailWorkspace";
 
 vi.mock("../../lib/ipc/mail-reader", () => ({
+  beginMailAttachmentDownload: vi.fn(),
+  cancelMailAttachmentDownload: vi.fn(),
   getInboxPage: vi.fn(),
+  getMailAttachmentDownloadStatus: vi.fn(),
   getMailMessageDetail: vi.fn(),
+  getSearchPage: vi.fn(),
   setMailMessageRead: vi.fn(),
 }));
 
@@ -61,8 +73,12 @@ function renderWorkspace(onReply = vi.fn()) {
 describe("MailWorkspace", () => {
   beforeEach(() => {
     vi.mocked(getInboxPage).mockReset();
+    vi.mocked(getSearchPage).mockReset();
     vi.mocked(getMailMessageDetail).mockReset();
     vi.mocked(setMailMessageRead).mockReset();
+    vi.mocked(beginMailAttachmentDownload).mockReset();
+    vi.mocked(getMailAttachmentDownloadStatus).mockReset();
+    vi.mocked(cancelMailAttachmentDownload).mockReset();
     vi.mocked(openExternalLink).mockReset();
   });
   afterEach(cleanup);
@@ -263,5 +279,71 @@ describe("MailWorkspace", () => {
       cursor: "v1:42:next",
       limit: 50,
     });
+  });
+
+  it("按当前账户和未读范围搜索本地邮件并打开结果", async () => {
+    const readSummary = { ...summary, read: true };
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getSearchPage).mockResolvedValue({
+      items: [{ summary: readSummary, matchContext: "正文中的项目进展" }],
+      nextCursor: null,
+    });
+    vi.mocked(getMailMessageDetail).mockResolvedValue({
+      summary: readSummary,
+      threadId: null,
+      rfcMessageId: null,
+      plainBody: "搜索结果正文",
+      htmlBody: null,
+      parserVersion: 1,
+      sanitizerVersion: 1,
+      addresses: [],
+      attachments: [],
+    });
+    renderWorkspace();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索邮件" }), {
+      target: { value: "项目" },
+    });
+    expect(await screen.findByText("正文中的项目进展")).toBeTruthy();
+    expect(getSearchPage).toHaveBeenCalledWith({
+      query: "项目",
+      accountId: null,
+      unreadOnly: false,
+      cursor: null,
+      limit: 50,
+    });
+    expect(await screen.findByText("搜索结果正文")).toBeTruthy();
+  });
+
+  it("附件保存选择被取消时恢复空闲且不显示失败", async () => {
+    const readSummary = { ...summary, read: true, hasAttachments: true };
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue({
+      summary: readSummary,
+      threadId: null,
+      rfcMessageId: null,
+      plainBody: "附件测试正文",
+      htmlBody: null,
+      parserVersion: 1,
+      sanitizerVersion: 1,
+      addresses: [],
+      attachments: [
+        {
+          id: "00000000-0000-4000-8000-000000000005",
+          fileName: "report.txt",
+          mediaType: "text/plain",
+          sizeBytes: "12",
+          contentId: null,
+          inline: false,
+        },
+      ],
+    });
+    vi.mocked(beginMailAttachmentDownload).mockResolvedValue(null);
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    await waitFor(() => expect(beginMailAttachmentDownload).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
   });
 });

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeAttachmentDownloadError,
+  decodeAttachmentDownloadSnapshot,
   decodeAssignReadStateResult,
   decodeInboxPage,
   decodeMessageDetail,
   decodeRemoteImageResult,
+  decodeSearchPage,
 } from "./mail-reader";
 
 const messageId = "00000000-0000-4000-8000-000000000001";
@@ -79,6 +82,39 @@ describe("mail reader IPC decoders", () => {
       generation: "7",
     });
     expect(() => decodeAssignReadStateResult({ messageId, read: true, generation: -1 })).toThrow(
+      TypeError,
+    );
+  });
+
+  it("validates search pages and attachment operation states", () => {
+    expect(
+      decodeSearchPage({
+        items: [{ summary, matchContext: "项目进展" }],
+        nextCursor: "v1:opaque",
+      }),
+    ).toEqual({
+      items: [{ summary, matchContext: "项目进展" }],
+      nextCursor: "v1:opaque",
+    });
+    const downloading = {
+      operationId: "00000000-0000-4000-8000-000000000005",
+      attachmentId: "00000000-0000-4000-8000-000000000004",
+      state: "downloading",
+      bytesWritten: "12",
+      totalBytes: "24",
+      error: null,
+    };
+    expect(decodeAttachmentDownloadSnapshot(downloading)).toEqual(downloading);
+    const error = {
+      code: "destination_collision",
+      message: "目标位置已有同名文件，请选择其他名称。",
+      retryable: true,
+    };
+    expect(decodeAttachmentDownloadError(error)).toEqual(error);
+    expect(() =>
+      decodeAttachmentDownloadSnapshot({ ...downloading, state: "failed", error: null }),
+    ).toThrow(TypeError);
+    expect(() => decodeAttachmentDownloadError({ ...error, message: "C:\\secret" })).toThrow(
       TypeError,
     );
   });
