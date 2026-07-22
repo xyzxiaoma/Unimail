@@ -258,3 +258,38 @@ Implemented the local-first unified Inbox, virtualized paging, offline reader, d
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Compose drafts reply send and Sent reconciliation
+
+**Date**: 2026-07-22
+**Task**: Compose drafts reply send and Sent reconciliation
+**Branch**: `main`
+
+### Summary
+
+Implemented durable local drafts, plain-text compose and reply, explicit offline-safe sending, guarded ambiguous retry, provider-specific read-only Sent reconciliation, functional Drafts/Sent UI, shutdown flush, IPC decoders, tests, changelog, specs, and owner acceptance guidance. Full frontend and Rust quality gates pass; task remains in progress for live-account owner acceptance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `32f4df5` | (see git log) |
+| `008edb9` | (see git log) |
+| `2c12d76` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
