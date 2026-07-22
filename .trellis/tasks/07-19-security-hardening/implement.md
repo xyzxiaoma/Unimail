@@ -207,6 +207,10 @@ Still required before archive:
 - Local Windows acceptance opened the “安全与诊断” modal from the packaged application, confirmed
   the approved version/platform/storage/provider-count fields and absence of private mail/account
   data, then closed the modal while the native process remained alive.
+- GitHub Actions run `29910435080` passed security and Windows native startup, but macOS exposed a
+  resolver gap: Tauri removes the intermediate `.app` after producing the DMG. The smoke script now
+  falls back to the retained `target/release/unimail` executable, which exercises the same runtime
+  initialization path without depending on the cleaned bundle directory.
 
 ## Bug Analysis: Packaged Application Exited Before Showing the Main Window
 

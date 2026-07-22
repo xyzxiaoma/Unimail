@@ -104,7 +104,9 @@ pwsh -File scripts/check-native-startup.ps1
   OAuth runtimes, provider clients, or any other Reqwest/rustls consumer.
 - Provider installation is process-wide and idempotent for repeated test/feature calls.
 - The startup script resolves the packaged executable for the current Windows/macOS runner, launches
-  it from its package directory, and requires it to remain alive for five seconds.
+  it from its package directory, and requires it to remain alive for five seconds. On macOS it first
+  uses the `.app/Contents/MacOS` executable, then falls back to `target/release/unimail` because Tauri
+  removes the intermediate `.app` after producing the DMG.
 - A passing smoke check stops the process it created. An early exit fails with the exit code and
   captured stdout/stderr; those streams must remain free of credentials and private mail data.
 
@@ -114,14 +116,15 @@ pwsh -File scripts/check-native-startup.ps1
 | --- | --- |
 | Reqwest client is built before a rustls provider is installed | Regression test or native smoke fails |
 | Packaged executable is absent | Startup script fails with the required build instruction |
+| macOS DMG packaging removed the intermediate `.app` | Script launches the retained `target/release/unimail` binary |
 | Native process exits inside the smoke window | Workflow fails before artifact upload |
 | Native process remains alive through the smoke window | Script reports success and terminates only its own process |
 | Unsupported runner platform invokes the script | Script fails rather than guessing an executable path |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: Windows and macOS build, launch the packaged executable, keep it alive for five seconds, then
-  upload the unsigned artifact.
+- Good: Windows and macOS build, launch the retained native executable (including the macOS
+  post-DMG fallback), keep it alive for five seconds, then upload the unsigned artifact.
 - Base: unit tests call the idempotent setup helper before constructing focused HTTP clients.
 - Bad: CI uploads an installer immediately after `tauri build`, or a feature path installs the crypto
   provider only after another startup component may already construct Reqwest.
@@ -131,6 +134,8 @@ pwsh -File scripts/check-native-startup.ps1
 - Unit test: call desktop crypto setup, assert a default provider exists, and build a Reqwest client.
 - Local/native test: run `npm run tauri build`, then `pwsh -File scripts/check-native-startup.ps1`.
 - CI: run the startup script on both Windows and macOS after package build and before artifact upload.
+- macOS resolver test: cover both an available `.app` executable and the post-DMG release-binary
+  fallback whenever script-level test infrastructure is introduced.
 - Failure review: confirm early-exit diagnostics are fixed/runtime-safe and contain no sensitive data.
 
 ### 7. Wrong vs Correct

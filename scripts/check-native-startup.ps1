@@ -16,6 +16,13 @@ function Resolve-UnimailExecutable {
         if ($candidate) {
             return $candidate.FullName
         }
+
+        # Tauri removes the intermediate .app after producing a DMG, while the same
+        # native executable remains in target/release for runtime initialization checks.
+        $releasePath = Join-Path $PSScriptRoot "../target/release/unimail"
+        if (Test-Path -LiteralPath $releasePath -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $releasePath).Path
+        }
     }
 
     throw "没有找到当前平台的 Unimail 原生可执行文件，请先运行 npm run tauri build。"
