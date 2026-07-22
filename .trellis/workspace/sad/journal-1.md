@@ -223,3 +223,38 @@ Implemented Microsoft public-client OAuth, Graph latest-500 and delta sync, MIME
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Complete unified Inbox and secure reader
+
+**Date**: 2026-07-22
+**Task**: Complete unified Inbox and secure reader
+**Branch**: `main`
+
+### Summary
+
+Implemented the local-first unified Inbox, virtualized paging, offline reader, delayed read convergence, sandboxed HTML, confirmed external links, and SSRF-resistant current-message remote images; all frontend and Rust workspace gates pass.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8de19a` | (see git log) |
+| `5002cc5` | (see git log) |
+| `b2b4b98` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
