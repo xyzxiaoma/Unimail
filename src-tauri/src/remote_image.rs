@@ -87,7 +87,7 @@ impl RemoteImageTransport for ReqwestTransport {
         pinned_address: SocketAddr,
     ) -> BoxFuture<'a, Result<RemoteImageResponse, RemoteImageError>> {
         Box::pin(async move {
-            let _ = rustls::crypto::ring::default_provider().install_default();
+            crate::install_rustls_crypto_provider();
             let host = url.host_str().ok_or(RemoteImageError::Invalid)?;
             let client = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn request_has_no_credentials_cookie_or_referrer_headers() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        crate::install_rustls_crypto_provider();
         let client = reqwest::Client::builder().build().expect("test client");
         let request = build_request(
             &client,

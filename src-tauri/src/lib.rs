@@ -52,6 +52,10 @@ use crate::{
 
 const DATABASE_FILE_NAME: &str = "unimail.db";
 
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 struct StorageState {
     repository: Result<Arc<SqlCipherRepository>, RepositoryError>,
     credential_store: CredentialStoreKind,
@@ -1642,6 +1646,7 @@ fn main_window_navigation_allowed(url: &url::Url, development: bool) -> bool {
 ///
 /// Panics when Tauri cannot initialize or run the application event loop.
 pub fn run() {
+    install_rustls_crypto_provider();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -1711,9 +1716,19 @@ mod tests {
     };
 
     use super::{
-        ProviderAccountCounts, main_window_navigation_allowed, map_storage_status,
-        provider_security_diagnostics, unavailable_storage_diagnostics, validate_external_url,
+        ProviderAccountCounts, install_rustls_crypto_provider, main_window_navigation_allowed,
+        map_storage_status, provider_security_diagnostics, unavailable_storage_diagnostics,
+        validate_external_url,
     };
+
+    #[test]
+    fn native_runtime_installs_crypto_before_building_http_clients() {
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        reqwest::Client::builder()
+            .build()
+            .expect("HTTP client should build after native runtime setup");
+    }
 
     fn account(
         provider: Provider,
