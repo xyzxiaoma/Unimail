@@ -30,6 +30,7 @@ jobs:
           toolchain: 1.95.0
       - run: npm ci
       - run: npm run check:security
+      - run: npm run check:release
       - run: npm audit --omit=dev
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - run: cargo install cargo-deny --version 0.20.2 --locked

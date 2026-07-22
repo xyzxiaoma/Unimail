@@ -89,6 +89,7 @@ npm run typecheck
 npm test
 npm run check:bindings
 npm run check:changes
+npm run check:release
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
@@ -104,9 +105,21 @@ npm run tauri build
 
 Windows 开发机只能原生构建 Windows 安装包。macOS 的 `.app`/`.dmg` 必须在 macOS 上构建，本项目通过 GitHub Actions 的 `macos-latest` 运行器验证；Actions 成功不能替代真实 Mac 上的启动、权限和安装体验测试。
 
-每次普通分支 push 都会在 Windows 与 macOS 原生运行器上执行检查和 Tauri 构建，并上传带 `unsigned` 标识、保留 14 天的工作流产物。普通 push 不会创建 GitHub Release。这些安装包尚未完成 Windows Authenticode 签名、Apple Developer ID 签名或公证，系统可能显示未知发布者或安全提示。
+每次普通分支 push 都会在 Windows 与 macOS 原生运行器上执行检查和 Tauri 构建，并上传带 `unsigned` 标识、保留 14 天的工作流产物。普通 push 没有 Release 写权限，永远不会创建 GitHub Release。这些普通 CI 安装包用于测试，可能显示未知发布者或系统安全提示。
 
-`v*` 标签工作流会先校验标签、项目版本和中文更新日志是否一致，再生成未签名发布候选。创建草稿 Release 的写权限被隔离在最后一个 job，且默认关闭；只有仓库变量 `ENABLE_DRAFT_RELEASE=true` 时才会运行。完整签名、公证、更新器元数据和正式发布将在后续 release integration 工作中实现。
+正式发布候选固定为：
+
+- Windows x86_64 NSIS `.exe`
+- 同时支持 Apple Silicon 与 Intel 的 macOS Universal `.dmg`
+
+发布工作流支持两种入口：
+
+- `workflow_dispatch`：只读 dry run。校验指定的 `vX.Y.Z`、构建两个平台、验证启动和签名状态、生成完整 payload，但绝不创建 Release。
+- 精确的 `vX.Y.Z` tag push：执行同一套校验和组装，之后等待受保护的 GitHub `release` Environment 人工批准，再由唯一拥有 `contents: write` 的 job 创建草稿、上传并核对全部资产，最后一次性公开。
+
+每个公开 Release 都包含安装包、`SHA256SUMS`、`release-provenance.json` 和中文发布说明。只有 Windows Authenticode 与 macOS Developer ID 签名、公证全部验证通过时才会发布稳定版；任一平台使用未签名或 ad-hoc 测试包时，Release 会自动标为 pre-release，并显示中文测试警告。
+
+V1 仅支持手动下载，未安装 Tauri updater 插件，不生成 `.sig`、updater bundle 或 `latest.json`，应用内也不会自动检查、下载或安装更新。
 
 ## 凭据与本地数据
 
@@ -117,7 +130,16 @@ Windows 开发机只能原生构建 Windows 安装包。macOS 的 `.app`/`.dmg` 
 - Windows/macOS 签名证书、证书密码、Apple API key、notarization 凭据
 - Tauri updater 私钥或任何可恢复私钥的材料
 
-需要 CI 使用的服务商配置或签名材料必须存入 GitHub Actions Secrets，并由对应功能的工作流按最小权限读取；本阶段的普通测试构建不要求这些 Secret。
+需要 CI 使用的服务商配置或签名材料必须存入 GitHub Actions Secrets，并由对应功能的工作流按最小权限读取。普通测试构建和无签名发布候选不要求这些 Secret。
+
+发布工作流识别以下 Secret：
+
+| 平台    | GitHub Actions Secrets                                                                                                     |
+| ------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Windows | `WINDOWS_CERTIFICATE`、`WINDOWS_CERTIFICATE_PASSWORD`                                                                      |
+| macOS   | `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` |
+
+每个平台的 Secret 必须“全部未配置”或“全部配置”。部分配置会在构建前失败并只报告缺失的变量名，不会静默降级，也不会输出 Secret 值。Windows PFX 和 macOS P12/临时 Keychain 只写入 runner 临时目录并在 `always()` 清理步骤中删除。
 
 ## 发布说明
 
@@ -125,4 +147,16 @@ Windows 开发机只能原生构建 Windows 安装包。macOS 的 `.app`/`.dmg` 
 
 1. 将相关条目移动到 `## X.Y.Z - YYYY-MM-DD` 章节。
 2. 使 `package.json`、根 `Cargo.toml` 的工作区版本和 `src-tauri/tauri.conf.json` 的版本都等于 `X.Y.Z`；`src-tauri/Cargo.toml` 继承工作区版本。
-3. 运行 `npm run check:release-tag -- vX.Y.Z`。
+3. 运行 `npm run check:release` 和 `npm run check:release-tag -- vX.Y.Z`。
+4. 在 GitHub Actions 手动运行“桌面端发布候选与受保护发布”，输入 `vX.Y.Z` 完成 dry run；它不会创建 tag 或 Release。
+5. 确认仓库已创建名为 `release` 的 Environment，并配置 required reviewers。没有人工批准保护时，不得创建正式 tag。
+6. 所有 dry-run 资产与签名状态确认后，执行：
+
+```powershell
+git tag -a vX.Y.Z -m "Unimail vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+tag 流程到达 `release` Environment 后，由仓库所有者审阅 provenance、签名状态和中文说明，再批准发布 job。实施和测试发布流程时不要提前创建真实 tag。
+
+完整的 Secret 准备、dry run、人工审批、草稿恢复和签名密钥轮换边界见 [发布所有者检查清单](doc/Release_Owner_Checklist.zh-CN.md)。

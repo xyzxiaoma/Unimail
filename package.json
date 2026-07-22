@@ -21,6 +21,7 @@
     "check:changes": "npm run check:paths && npm run check:release-note",
     "check:security": "node scripts/check-security.mjs",
     "check:security:self-test": "node scripts/check-security.mjs --self-test",
+    "check:release": "node scripts/check-release.mjs",
     "check:release-tag": "node scripts/check-release-tag.mjs",
     "ci:validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:bindings && npm run check:security && cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace",
     "tauri": "tauri"
