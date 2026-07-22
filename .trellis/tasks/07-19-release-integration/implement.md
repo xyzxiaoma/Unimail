@@ -154,3 +154,20 @@ Also verify in Actions:
 - Require Windows/macOS release-candidate dry-run artifacts and checks to pass.
 - Do not create the first real `v0.1.0` tag or public Release until the owner separately approves the
   prepared version/changelog, signing state, protected environment, and final publication action.
+
+## Current Verification State
+
+- `CHANGELOG.zh-CN.md` now contains the exact `0.1.0 - 2026-07-22` Chinese version section, and
+  `npm run check:release-tag -- v0.1.0`, `npm run check:release`, and changed-path/release-note checks
+  pass locally.
+- GitHub Actions workflow-dispatch dry run
+  [`29930204222`](https://github.com/xyzxiaoma/Unimail/actions/runs/29930204222) passed against commit
+  `778cea488f3a82be5e1b9f5885da81ca50fadae0` without creating a tag or Release.
+- The release contract, Windows x86_64 NSIS, macOS Universal DMG, and read-only assembly jobs passed.
+  The protected publisher was skipped as required for `workflow_dispatch`.
+- The run produced `release-candidate-windows-v0.1.0`, `release-candidate-macos-v0.1.0`, and
+  `release-payload-v0.1.0-778cea488f3a82be5e1b9f5885da81ca50fadae0`; the GitHub Release count
+  remained zero after completion.
+- The task remains `in_progress`: production Authenticode, Developer ID signing/notarization,
+  protected-environment approval, and the first real tag/publication stay owner-controlled and have
+  not been executed.
