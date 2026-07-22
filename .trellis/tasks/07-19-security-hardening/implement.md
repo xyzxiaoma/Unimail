@@ -190,7 +190,63 @@ Completed locally on Windows:
 
 Still required before archive:
 
-- A named macOS CI step now runs the two Unix owner-only storage tests with exact filters; the actual
-  macOS workflow run and native build must still pass before archive.
-- Manual Windows/macOS launch and owner-visible acceptance of the “安全与诊断” modal.
+- Commit and push the native-startup regression fix, then require the new Windows/macOS workflow run
+  to pass the packaged-executable smoke step before archive.
 - Keep GitHub Release publication out of this task; release remains tag-only and separately gated.
+
+## Native Startup Regression — 2026-07-22
+
+- GitHub Actions run `29902182042` passed the security audit, macOS owner-only permission tests,
+  Windows/macOS native builds, and unsigned artifact uploads.
+- A subsequent local launch exposed a packaging-only gap: Reqwest panicked before the main window
+  because the desktop composition root had not installed the configured rustls ring provider.
+- The desktop now installs the provider before any OAuth/provider runtime is constructed, shares
+  that setup with remote-image clients, and tests that a Reqwest client can be built afterward.
+- Windows/macOS CI and tag-candidate workflows now launch the packaged native executable for a
+  bounded smoke window before artifact upload, so a build that exits during startup cannot pass.
+- Local Windows acceptance opened the “安全与诊断” modal from the packaged application, confirmed
+  the approved version/platform/storage/provider-count fields and absence of private mail/account
+  data, then closed the modal while the native process remained alive.
+
+## Bug Analysis: Packaged Application Exited Before Showing the Main Window
+
+### 1. Root Cause Category
+
+- **Category**: D - Test Coverage Gap
+- **Specific Cause**: Compilation, unit tests, and native packaging never executed the desktop
+  composition root. With `rustls-no-provider`, Reqwest construction panics until one process-wide
+  provider is installed, but the only existing installation happened inside the later remote-image
+  request path rather than before OAuth/provider clients were constructed.
+
+### 2. Why Earlier Verification Missed It
+
+1. Native packaging proved that the executable and installers could be produced, but did not launch
+   the executable and therefore never exercised runtime initialization.
+2. Focused HTTP tests installed the provider in their own path, masking the missing composition-root
+   contract instead of proving the same order used by the packaged application.
+3. Cross-platform CI uploaded artifacts immediately after build, so an application that panicked in
+   its first seconds was indistinguishable from a healthy package.
+
+### 3. Prevention Mechanisms
+
+| Priority | Mechanism | Specific Action | Status |
+| --- | --- | --- | --- |
+| P0 | Architecture | Install the reviewed ring provider once at the desktop composition root before constructing any HTTP-dependent runtime | DONE |
+| P0 | Test coverage | Add a regression test that constructs a Reqwest client after desktop crypto initialization | DONE |
+| P0 | Native smoke | Launch packaged Windows/macOS executables for a bounded interval before artifact upload | DONE |
+| P1 | Documentation | Record the crypto-provider ordering and package-launch requirement in backend quality guidelines | DONE |
+
+### 4. Systematic Expansion
+
+- **Similar Issues**: Native credential prompts, app-data permission repair, plugin initialization,
+  and WebView/window policy can also compile and package successfully while failing only at startup.
+- **Design Improvement**: Keep process-wide runtime prerequisites in the composition root and expose
+  shared idempotent setup helpers instead of installing them in individual feature paths.
+- **Process Improvement**: Treat package creation and package execution as separate release gates;
+  every supported native artifact must survive a startup interval before it is publishable.
+
+### 5. Knowledge Capture
+
+- [x] Updated `.trellis/spec/backend/quality-guidelines.md` with the rustls initialization contract.
+- [x] Added Windows/macOS packaged-executable smoke checks to CI and tag-candidate workflows.
+- [x] Added the user-visible startup fix to `CHANGELOG.zh-CN.md` under `未发布`.
