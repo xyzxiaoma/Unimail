@@ -30,6 +30,7 @@ export const mailReaderContent = {
   unknownSize: "大小未知",
   unnamedAttachment: "未命名附件",
   saveAttachment: "保存",
+  retryAttachment: "重试",
   preparingDownload: "正在准备…",
   downloadingAttachment: "正在下载",
   attachmentProgress: (progress: number) => `已下载 ${String(progress)}%`,

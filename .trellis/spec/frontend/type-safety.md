@@ -462,6 +462,10 @@ attachment ID -> begin/status/cancel -> Promise<unknown> -> snapshot decoder -> 
   and a fixed code/message/retryability envelope. No path-shaped field is part of the DTO.
 - The UI derives the newest snapshot from query data instead of synchronously mirroring polling data
   into component state from an effect.
+- Begin and cancel command responses are authoritative snapshots. When cancel returns a terminal
+  snapshot for an operation that already has polling data, write that snapshot to
+  `["attachment-download", operationId]`; otherwise stale cached progress can keep the UI in the
+  downloading state after cancellation.
 
 ### 4. Runtime Validation and Errors
 
@@ -471,6 +475,7 @@ attachment ID -> begin/status/cancel -> Promise<unknown> -> snapshot decoder -> 
 | Unknown attachment state/error or unsafe byte string | Throw `TypeError` |
 | Begin returns `null` | Treat as normal save-dialog cancellation |
 | Status query rejects | Keep the last safe snapshot and show generic Chinese failure copy |
+| Cancel returns terminal state while polling cache still says downloading | Replace the same query-key data with the cancel snapshot before rendering |
 | Command rejection is not a validated fixed envelope | Never display its raw value |
 
 ### 5. Good / Base / Bad Cases
@@ -485,7 +490,9 @@ attachment ID -> begin/status/cancel -> Promise<unknown> -> snapshot decoder -> 
 - Decoder tables cover valid and malformed search pages, cursors, operation states, byte strings,
   and fixed errors.
 - Component tests cover debounce/scope/clear/paging/result opening plus chooser cancellation,
-  progress, cancel, failure, retry, and independent attachments.
+  progress, cancel, failure, retry, and independent attachments. The cancel regression must seed a
+  downloading polling snapshot, return `cancelled` from the mutation, and assert the visible action
+  leaves progress immediately.
 - Run Prettier, ESLint, typecheck, Vitest, binding drift, production build, and changed-path checks.
 
 ### 7. Wrong vs Correct
@@ -494,8 +501,17 @@ attachment ID -> begin/status/cancel -> Promise<unknown> -> snapshot decoder -> 
 // Wrong: duplicates server state and violates the effect rule.
 useEffect(() => { if (status.data) setOperation(status.data); }, [status.data]);
 
+// Wrong: local state changes, but stale query data still wins in `status.data ?? operation`.
+cancelMailAttachmentDownload(id).then(setOperation);
+
 // Correct: polling data is already the current server-state projection.
 const current = status.data ?? operation;
+
+// Correct: the terminal mutation response replaces the cache entry it supersedes.
+cancelMailAttachmentDownload(id).then((snapshot) => {
+  setOperation(snapshot);
+  queryClient.setQueryData(["attachment-download", snapshot.operationId], snapshot);
+});
 ```
 
 ## Mandatory Seven-Section Scenario: local security diagnostics UI

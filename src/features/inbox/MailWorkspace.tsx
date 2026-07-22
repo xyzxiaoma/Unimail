@@ -52,6 +52,7 @@ function displaySize(value: string | null): string {
 }
 
 function AttachmentAction({ attachment }: { attachment: MessageDetailV1["attachments"][number] }) {
+  const queryClient = useQueryClient();
   const [operation, setOperation] = useState<AttachmentDownloadSnapshotV1 | null>(null);
   const [failed, setFailed] = useState(false);
   const begin = useMutation({
@@ -100,7 +101,10 @@ function AttachmentAction({ attachment }: { attachment: MessageDetailV1["attachm
           type="button"
           onClick={() => {
             void cancelMailAttachmentDownload(current.operationId)
-              .then(setOperation)
+              .then((snapshot) => {
+                setOperation(snapshot);
+                queryClient.setQueryData(["attachment-download", snapshot.operationId], snapshot);
+              })
               .catch(() => setFailed(true));
           }}
         >
@@ -112,7 +116,9 @@ function AttachmentAction({ attachment }: { attachment: MessageDetailV1["attachm
             ? mailReaderContent.preparingDownload
             : current?.state === "completed"
               ? mailReaderContent.savedAttachment
-              : mailReaderContent.saveAttachment}
+              : failed || current?.state === "failed"
+                ? mailReaderContent.retryAttachment
+                : mailReaderContent.saveAttachment}
         </button>
       )}
       {current?.state === "cancelled" && <span>{mailReaderContent.downloadCancelled}</span>}

@@ -162,3 +162,18 @@ Also run a Windows desktop smoke test when the environment permits:
 - Run `trellis-check` after implementation.
 - Update executable specs for any new stable attachment, search, IPC, cleanup, or CJK-index contract learned during implementation.
 - Commit only after all required checks pass. Do not archive this child until owner-visible attachment/search acceptance is complete; do not archive the compose or QQ/163 children while their live acceptance remains outstanding.
+
+## Current Verification State
+
+- Added `doc/Attachments_Search_Owner_Acceptance.zh-CN.md` and linked it from `README.md` so native
+  chooser, collision, cancellation, restart cleanup, and offline search can be verified without
+  recording mail content, queries, or local paths.
+- Added frontend acceptance coverage for clearing search back to Inbox, independent attachment
+  progress, cancellation, safe typed collision failure, and retry to completion.
+- Fixed cancellation state so the authoritative terminal snapshot replaces stale polling cache data;
+  the visible action now leaves progress immediately and failed attachments explicitly show “重试”.
+- Focused frontend checks pass with 19 tests across `MailWorkspace` and reader IPC, plus strict ESLint
+  and TypeScript checks. Existing focused SQLCipher search/cleanup and application streaming tests
+  also pass.
+- The child remains `in_progress` until the owner runs the native Windows checklist with controlled
+  test mail and confirms the user-visible filesystem/search observations.

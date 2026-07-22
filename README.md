@@ -78,6 +78,10 @@ npm run tauri dev
 
 连接任一支持的邮箱后，可通过“写邮件”或阅读器中的“回复”测试纯文本写信、本地草稿、离线保护和 Sent 对账。跨 Gmail、Outlook、QQ 与 163 的完整手工步骤见 [`doc/Compose_Send_Owner_Acceptance.zh-CN.md`](doc/Compose_Send_Owner_Acceptance.zh-CN.md)；测试时不要记录真实收件人、主题、正文、Message-ID、服务商邮件 ID 或授权信息。
 
+## 附件与本地搜索验收
+
+使用专门的测试邮箱可验证系统原生另存窗口、下载取消/冲突/重试，以及断网后的本地 Inbox 搜索。完整步骤见 [`doc/Attachments_Search_Owner_Acceptance.zh-CN.md`](doc/Attachments_Search_Owner_Acceptance.zh-CN.md)；验收记录不得包含邮件内容、附件内容、搜索词或本地保存路径。
+
 ## 质量检查
 
 提交前运行：

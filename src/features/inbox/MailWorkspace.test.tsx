@@ -31,6 +31,10 @@ const messageId = "00000000-0000-4000-8000-000000000001";
 const secondMessageId = "00000000-0000-4000-8000-000000000004";
 const accountId = "00000000-0000-4000-8000-000000000002";
 const mailboxId = "00000000-0000-4000-8000-000000000003";
+const attachmentId = "00000000-0000-4000-8000-000000000005";
+const secondAttachmentId = "00000000-0000-4000-8000-000000000006";
+const operationId = "00000000-0000-4000-8000-000000000007";
+const retryOperationId = "00000000-0000-4000-8000-000000000008";
 const summary = {
   id: messageId,
   accountId,
@@ -68,6 +72,27 @@ function renderWorkspace(onReply = vi.fn()) {
       />
     </QueryClientProvider>,
   );
+}
+
+function attachmentDetail(attachments: Array<{ id: string; fileName: string }>) {
+  const readSummary = { ...summary, read: true, hasAttachments: true };
+  return {
+    summary: readSummary,
+    threadId: null,
+    rfcMessageId: null,
+    plainBody: "附件测试正文",
+    htmlBody: null,
+    parserVersion: 1,
+    sanitizerVersion: 1,
+    addresses: [],
+    attachments: attachments.map((attachment) => ({
+      ...attachment,
+      mediaType: "text/plain",
+      sizeBytes: "12",
+      contentId: null,
+      inline: false,
+    })),
+  };
 }
 
 describe("MailWorkspace", () => {
@@ -315,29 +340,53 @@ describe("MailWorkspace", () => {
     expect(await screen.findByText("搜索结果正文")).toBeTruthy();
   });
 
+  it("清除搜索后恢复本地收件箱且不提交空查询", async () => {
+    const searchSummary = {
+      ...summary,
+      id: secondMessageId,
+      subject: "本地搜索结果",
+      snippet: "搜索摘要",
+      read: true,
+    };
+    vi.mocked(getInboxPage).mockResolvedValue({
+      items: [{ ...summary, read: true }],
+      nextCursor: null,
+    });
+    vi.mocked(getSearchPage).mockResolvedValue({
+      items: [{ summary: searchSummary, matchContext: "正文命中内容" }],
+      nextCursor: null,
+    });
+    vi.mocked(getMailMessageDetail).mockImplementation((id) =>
+      Promise.resolve({
+        summary: id === secondMessageId ? searchSummary : { ...summary, read: true },
+        threadId: null,
+        rfcMessageId: null,
+        plainBody: id === secondMessageId ? "搜索结果正文" : "原收件箱正文",
+        htmlBody: null,
+        parserVersion: 1,
+        sanitizerVersion: 1,
+        addresses: [],
+        attachments: [],
+      }),
+    );
+    renderWorkspace();
+
+    const searchbox = screen.getByRole("searchbox", { name: "搜索邮件" });
+    fireEvent.change(searchbox, { target: { value: "项目" } });
+    expect(await screen.findByText("正文命中内容")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+
+    expect(await screen.findByRole("option", { name: /统一收件箱测试/ })).toBeTruthy();
+    expect(getSearchPage).toHaveBeenCalledTimes(1);
+    expect(getSearchPage).not.toHaveBeenCalledWith(expect.objectContaining({ query: "" }));
+  });
+
   it("附件保存选择被取消时恢复空闲且不显示失败", async () => {
     const readSummary = { ...summary, read: true, hasAttachments: true };
     vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
-    vi.mocked(getMailMessageDetail).mockResolvedValue({
-      summary: readSummary,
-      threadId: null,
-      rfcMessageId: null,
-      plainBody: "附件测试正文",
-      htmlBody: null,
-      parserVersion: 1,
-      sanitizerVersion: 1,
-      addresses: [],
-      attachments: [
-        {
-          id: "00000000-0000-4000-8000-000000000005",
-          fileName: "report.txt",
-          mediaType: "text/plain",
-          sizeBytes: "12",
-          contentId: null,
-          inline: false,
-        },
-      ],
-    });
+    vi.mocked(getMailMessageDetail).mockResolvedValue(
+      attachmentDetail([{ id: attachmentId, fileName: "report.txt" }]),
+    );
     vi.mocked(beginMailAttachmentDownload).mockResolvedValue(null);
     renderWorkspace();
 
@@ -345,5 +394,85 @@ describe("MailWorkspace", () => {
     await waitFor(() => expect(beginMailAttachmentDownload).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
+  });
+
+  it("显示附件进度并在取消后立即恢复保存操作", async () => {
+    const readSummary = { ...summary, read: true, hasAttachments: true };
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue(
+      attachmentDetail([
+        { id: attachmentId, fileName: "report.txt" },
+        { id: secondAttachmentId, fileName: "notes.txt" },
+      ]),
+    );
+    const downloading = {
+      operationId,
+      attachmentId,
+      state: "downloading" as const,
+      bytesWritten: "6",
+      totalBytes: "12",
+      error: null,
+    };
+    vi.mocked(beginMailAttachmentDownload).mockResolvedValue(downloading);
+    vi.mocked(getMailAttachmentDownloadStatus).mockResolvedValue(downloading);
+    vi.mocked(cancelMailAttachmentDownload).mockResolvedValue({
+      ...downloading,
+      state: "cancelled",
+    });
+    renderWorkspace();
+
+    const reportItem = (await screen.findByText("report.txt")).closest("li");
+    const notesItem = screen.getByText("notes.txt").closest("li");
+    expect(reportItem).not.toBeNull();
+    expect(notesItem).not.toBeNull();
+    fireEvent.click(within(reportItem as HTMLElement).getByRole("button", { name: "保存" }));
+
+    const cancel = await within(reportItem as HTMLElement).findByRole("button", {
+      name: "已下载 50% · 取消",
+    });
+    expect(within(notesItem as HTMLElement).getByRole("button", { name: "保存" })).toBeTruthy();
+    fireEvent.click(cancel);
+
+    expect(await within(reportItem as HTMLElement).findByText("下载已取消")).toBeTruthy();
+    expect(within(reportItem as HTMLElement).getByRole("button", { name: "保存" })).toBeTruthy();
+  });
+
+  it("附件失败时显示安全错误并允许独立重试", async () => {
+    const readSummary = { ...summary, read: true, hasAttachments: true };
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue(
+      attachmentDetail([{ id: attachmentId, fileName: "report.txt" }]),
+    );
+    vi.mocked(beginMailAttachmentDownload)
+      .mockResolvedValueOnce({
+        operationId,
+        attachmentId,
+        state: "failed",
+        bytesWritten: "0",
+        totalBytes: "12",
+        error: {
+          code: "destination_collision",
+          message: "目标位置已有同名文件，请选择其他名称。",
+          retryable: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        operationId: retryOperationId,
+        attachmentId,
+        state: "completed",
+        bytesWritten: "12",
+        totalBytes: "12",
+        error: null,
+      });
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "目标位置已有同名文件，请选择其他名称。",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("button", { name: "已保存" })).toBeTruthy();
+    expect(beginMailAttachmentDownload).toHaveBeenCalledTimes(2);
   });
 });
