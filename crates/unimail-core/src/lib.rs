@@ -1,5 +1,6 @@
 //! Provider-neutral Unimail domain foundations.
 
+mod attachment;
 mod compose;
 mod compose_ipc;
 mod domain;
@@ -8,11 +9,16 @@ mod mime;
 mod onboarding;
 mod provider;
 mod reader;
+mod search;
 mod storage;
 
 use serde::Serialize;
 use ts_rs::TS;
 
+pub use attachment::{
+    AttachmentDownloadCommandError, AttachmentDownloadErrorCode, AttachmentDownloadSnapshotV1,
+    AttachmentDownloadSource, AttachmentDownloadStateV1, AttachmentVerificationInput,
+};
 pub use compose::{
     AuthorizeOutboundRetryInput, CompleteOutboundAttemptInput, OutboundAttempt,
     OutboundAttemptOutcome, OutboundAttemptSnapshot, OutboundAttemptState, OutboundFailureCode,
@@ -67,6 +73,11 @@ pub use reader::{
     AssignReadStateResultV1, InboxMessageSummaryV1, InboxPageRequestV1, InboxPageV1,
     MessageAddressV1, MessageDetailV1, ReaderAttachmentV1, RemoteImageResultV1,
     decode_inbox_cursor, encode_inbox_cursor,
+};
+pub use search::{
+    SearchMessageCursor, SearchMessageHit, SearchMessageHitV1, SearchMessagePage,
+    SearchMessagesInput, SearchPageRequestV1, SearchPageV1, decode_search_cursor,
+    encode_search_cursor, search_scope_hash,
 };
 pub use storage::{
     CredentialStore, CredentialStoreError, CredentialStoreKind, RepositoryError, RepositoryResult,

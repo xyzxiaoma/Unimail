@@ -1,3 +1,4 @@
+mod attachment_download;
 mod authorization_onboarding;
 mod oauth;
 mod onboarding;
@@ -8,21 +9,24 @@ use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
 use tauri::Manager;
 use unimail_application::{
-    BoundedSyncPermitPool, Clock, ComposeStore, ExplicitSendError, ExplicitSendProvider,
-    ExplicitSendRequest, ExplicitSendResult, ExplicitSendService, RetryPolicy, RunOutcome,
-    SentReconciliationError, SentReconciliationProvider, SentReconciliationService,
-    SyncCoordinator, SyncPermitPool, SyncProvider, SyncStore,
+    AttachmentDownloadService, AttachmentProvider, AttachmentStore, BoundedSyncPermitPool, Clock,
+    ComposeStore, ExplicitSendError, ExplicitSendProvider, ExplicitSendRequest, ExplicitSendResult,
+    ExplicitSendService, RetryPolicy, RunOutcome, SentReconciliationError,
+    SentReconciliationProvider, SentReconciliationService, SyncCoordinator, SyncPermitPool,
+    SyncProvider, SyncStore,
 };
 use unimail_core::{
     AccountAuthState, AccountId, ApplicationInfo, AssignReadStateResultV1,
-    AuthorizeOutboundRetryInput, ComposeCommandError, ComposeCommandErrorCode,
+    AttachmentDownloadCommandError, AttachmentDownloadErrorCode, AttachmentDownloadSnapshotV1,
+    AttachmentId, AuthorizeOutboundRetryInput, ComposeCommandError, ComposeCommandErrorCode,
     ConnectedAccountSummary, CredentialStore, DraftId, DraftSaveInput, DraftSummaryV1, DraftV1,
     ExplicitSendRequestV1, ExplicitSendResultV1, ExplicitSendStateV1, InboxPageRequestV1,
     InboxPageV1, MessageDetailV1, MessageId, MessageReadStateInput, OAuthOnboardingCommandError,
-    OAuthOnboardingErrorCode, OAuthOnboardingStatus, OutboundAttemptId, Provider,
+    OAuthOnboardingErrorCode, OAuthOnboardingStatus, OperationId, OutboundAttemptId, Provider,
     ProviderErrorKind, RemoteImageResultV1, RepositoryError, RepositoryResult,
-    RetryAuthorizationResultV1, SaveDraftRequestV1, SentItemV1, SentRefreshResultV1,
-    StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus, SyncState,
+    RetryAuthorizationResultV1, SaveDraftRequestV1, SearchPageRequestV1, SearchPageV1, SentItemV1,
+    SentRefreshResultV1, StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus,
+    SyncState,
 };
 use unimail_providers::{
     SharedMimeCodec,
@@ -33,6 +37,10 @@ use unimail_providers::{
 use unimail_storage::{NativeCredentialStore, SqlCipherRepository};
 
 use crate::{
+    attachment_download::{
+        AttachmentOperationState, MAX_ATTACHMENT_BYTES, choose_attachment_destination,
+        map_repository_error, sanitize_attachment_name, spawn_attachment_download,
+    },
     authorization_onboarding::AuthorizationCodeManager,
     oauth::{DesktopCancellation, RedirectHost, SystemBrowserOpener},
     onboarding::{OAuthSessionConfig, OAuthSessionManager},
@@ -100,6 +108,7 @@ struct OAuthProviderRuntime {
     manager: Arc<OAuthSessionManager>,
     provider: Arc<dyn ExplicitSendProvider>,
     reconciliation_provider: Arc<dyn SentReconciliationProvider>,
+    attachment_provider: Arc<dyn AttachmentProvider>,
 }
 
 #[derive(Clone)]
@@ -107,6 +116,7 @@ struct AuthorizationProviderRuntime {
     manager: Arc<AuthorizationCodeManager>,
     provider: Arc<dyn ExplicitSendProvider>,
     reconciliation_provider: Arc<dyn SentReconciliationProvider>,
+    attachment_provider: Arc<dyn AttachmentProvider>,
 }
 
 impl AuthorizationCodeState {
@@ -157,7 +167,8 @@ impl AuthorizationCodeState {
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
         let sync_provider: Arc<dyn SyncProvider> = provider.clone();
         let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
-        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider.clone();
+        let attachment_provider: Arc<dyn AttachmentProvider> = provider;
         let coordinator = build_coordinator(sync_provider, repository_port, permits)?;
         for account in repository
             .list_accounts()
@@ -191,6 +202,7 @@ impl AuthorizationCodeState {
             )),
             provider: send_provider,
             reconciliation_provider,
+            attachment_provider,
         })
     }
 
@@ -246,6 +258,25 @@ impl AuthorizationCodeState {
                 .netease
                 .as_ref()
                 .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
+            Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn attachment_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn AttachmentProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Qq => self
+                .qq
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.attachment_provider))
+                .map_err(|code| *code),
+            Provider::Netease => self
+                .netease
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.attachment_provider))
                 .map_err(|code| *code),
             Provider::Gmail | Provider::Outlook => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
@@ -323,7 +354,8 @@ impl OAuthState {
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
         let sync_provider: Arc<dyn SyncProvider> = provider.clone();
         let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
-        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider.clone();
+        let attachment_provider: Arc<dyn AttachmentProvider> = provider;
         let coordinator = build_coordinator(sync_provider, Arc::clone(&repository_port), permits)?;
         let manager = Arc::new(OAuthSessionManager::new(
             OAuthSessionConfig {
@@ -349,6 +381,7 @@ impl OAuthState {
             manager,
             provider: send_provider,
             reconciliation_provider,
+            attachment_provider,
         })
     }
 
@@ -380,7 +413,8 @@ impl OAuthState {
         let repository_port: Arc<dyn StorageRepository> = repository.clone();
         let sync_provider: Arc<dyn SyncProvider> = provider.clone();
         let send_provider: Arc<dyn ExplicitSendProvider> = provider.clone();
-        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider;
+        let reconciliation_provider: Arc<dyn SentReconciliationProvider> = provider.clone();
+        let attachment_provider: Arc<dyn AttachmentProvider> = provider;
         let coordinator = build_coordinator(sync_provider, Arc::clone(&repository_port), permits)?;
         let manager = Arc::new(OAuthSessionManager::new(
             OAuthSessionConfig {
@@ -406,6 +440,7 @@ impl OAuthState {
             manager,
             provider: send_provider,
             reconciliation_provider,
+            attachment_provider,
         })
     }
 
@@ -461,6 +496,25 @@ impl OAuthState {
                 .outlook
                 .as_ref()
                 .map(|runtime| Arc::clone(&runtime.reconciliation_provider))
+                .map_err(|code| *code),
+            Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
+        }
+    }
+
+    fn attachment_provider(
+        &self,
+        provider: Provider,
+    ) -> Result<Arc<dyn AttachmentProvider>, OAuthOnboardingErrorCode> {
+        match provider {
+            Provider::Gmail => self
+                .gmail
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.attachment_provider))
+                .map_err(|code| *code),
+            Provider::Outlook => self
+                .outlook
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.attachment_provider))
                 .map_err(|code| *code),
             Provider::Qq | Provider::Netease => Err(OAuthOnboardingErrorCode::NotConfigured),
         }
@@ -698,6 +752,21 @@ fn send_provider_for(
         .send_provider(provider)
         .or_else(|_| authorization_state.send_provider(provider))
         .map_err(|_| ComposeCommandError::from_code(ComposeCommandErrorCode::AccountUnavailable))
+}
+
+fn attachment_provider_for(
+    provider: Provider,
+    oauth_state: &OAuthState,
+    authorization_state: &AuthorizationCodeState,
+) -> Result<Arc<dyn AttachmentProvider>, AttachmentDownloadCommandError> {
+    oauth_state
+        .attachment_provider(provider)
+        .or_else(|_| authorization_state.attachment_provider(provider))
+        .map_err(|_| {
+            AttachmentDownloadCommandError::from_code(
+                AttachmentDownloadErrorCode::AccountUnavailable,
+            )
+        })
 }
 
 fn explicit_send_service(
@@ -1182,6 +1251,142 @@ async fn list_inbox_messages(
 }
 
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes the versioned request object.
+async fn search_inbox_messages(
+    request: SearchPageRequestV1,
+    state: tauri::State<'_, StorageState>,
+) -> Result<SearchPageV1, StorageCommandError> {
+    let input = request.into_domain()?;
+    let repository = state.repository()?;
+    let page = tokio::task::spawn_blocking(move || repository.search_inbox_messages(&input))
+        .await
+        .map_err(|_| StorageCommandError::from(RepositoryError::Internal))??;
+    Ok(page.into())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri owns command state and the app handle.
+async fn begin_attachment_download(
+    attachment_id: String,
+    app: tauri::AppHandle,
+    storage: tauri::State<'_, StorageState>,
+    oauth_state: tauri::State<'_, OAuthState>,
+    authorization_state: tauri::State<'_, AuthorizationCodeState>,
+    connectivity: tauri::State<'_, DesktopConnectivity>,
+    operations: tauri::State<'_, Arc<AttachmentOperationState>>,
+) -> Result<Option<AttachmentDownloadSnapshotV1>, AttachmentDownloadCommandError> {
+    let attachment_id = AttachmentId::from_str(&attachment_id).map_err(|_| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::AttachmentNotFound)
+    })?;
+    if let Some(snapshot) = operations.active_snapshot(attachment_id)? {
+        return Ok(Some(snapshot));
+    }
+    if connectivity.current() == unimail_application::ConnectivityState::Offline {
+        return Err(AttachmentDownloadCommandError::from_code(
+            AttachmentDownloadErrorCode::Offline,
+        ));
+    }
+    let repository = storage.repository().map_err(|_| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::StorageUnavailable)
+    })?;
+    let repository_for_source = Arc::clone(&repository);
+    let source = tokio::task::spawn_blocking(move || {
+        repository_for_source.get_attachment_download_source(attachment_id)
+    })
+    .await
+    .map_err(|_| AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::Internal))?
+    .map_err(map_repository_error)?
+    .ok_or_else(|| {
+        AttachmentDownloadCommandError::from_code(
+            AttachmentDownloadErrorCode::AttachmentUnavailable,
+        )
+    })?;
+    if source
+        .size_bytes
+        .is_some_and(|size| size > MAX_ATTACHMENT_BYTES)
+    {
+        return Err(AttachmentDownloadCommandError::from_code(
+            AttachmentDownloadErrorCode::AttachmentTooLarge,
+        ));
+    }
+    let provider = attachment_provider_for(source.provider, &oauth_state, &authorization_state)?;
+    let suggested_name = sanitize_attachment_name(source.file_name.as_deref());
+    let Some(destination) = choose_attachment_destination(&app, &suggested_name).await? else {
+        return Ok(None);
+    };
+    let operation_id = OperationId::new();
+    let repository_for_transfer = Arc::clone(&repository);
+    let transfer = tokio::task::spawn_blocking(move || {
+        repository_for_transfer.begin_attachment_transfer(
+            operation_id,
+            destination,
+            SystemClock.now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::Internal))?
+    .map_err(map_repository_error)?;
+    let cancellation = Arc::new(DesktopCancellation::default());
+    let snapshot = match operations.insert(
+        operation_id,
+        attachment_id,
+        source.size_bytes,
+        Arc::clone(&cancellation),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let repository_for_abort = Arc::clone(&repository);
+            let _ = tokio::task::spawn_blocking(move || {
+                repository_for_abort.abort_attachment_transfer(&transfer)
+            })
+            .await;
+            return Err(error);
+        }
+    };
+    let repository_port: Arc<dyn StorageRepository> = repository.clone();
+    let store: Arc<dyn AttachmentStore> = Arc::new(TokioSyncStore::new(repository_port));
+    let service = AttachmentDownloadService::new(store, provider, MAX_ATTACHMENT_BYTES);
+    spawn_attachment_download(
+        service,
+        source,
+        repository,
+        transfer,
+        operation_id,
+        Arc::clone(operations.inner()),
+        cancellation,
+    )?;
+    Ok(Some(snapshot))
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+fn get_attachment_download_status(
+    operation_id: String,
+    operations: tauri::State<'_, Arc<AttachmentOperationState>>,
+) -> Result<AttachmentDownloadSnapshotV1, AttachmentDownloadCommandError> {
+    let operation_id = OperationId::from_str(&operation_id).map_err(|_| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::AttachmentNotFound)
+    })?;
+    operations.get(operation_id)?.ok_or_else(|| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::AttachmentNotFound)
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
+fn cancel_attachment_download(
+    operation_id: String,
+    operations: tauri::State<'_, Arc<AttachmentOperationState>>,
+) -> Result<AttachmentDownloadSnapshotV1, AttachmentDownloadCommandError> {
+    let operation_id = OperationId::from_str(&operation_id).map_err(|_| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::AttachmentNotFound)
+    })?;
+    operations.cancel(operation_id)?.ok_or_else(|| {
+        AttachmentDownloadCommandError::from_code(AttachmentDownloadErrorCode::AttachmentNotFound)
+    })
+}
+
+#[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes owned command arguments.
 async fn get_message_detail(
     message_id: String,
@@ -1298,6 +1503,7 @@ fn open_confirmed_external_url(url: String) -> Result<(), StorageCommandError> {
 /// Panics when Tauri cannot initialize or run the application event loop.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let credentials: Arc<dyn CredentialStore> =
                 Arc::new(NativeCredentialStore::new(app.config().identifier.clone()));
@@ -1309,6 +1515,7 @@ pub fn run() {
             app.manage(oauth);
             app.manage(authorization_code);
             app.manage(connectivity);
+            app.manage(Arc::new(AttachmentOperationState::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1330,8 +1537,12 @@ pub fn run() {
             authorize_outbound_retry,
             report_connectivity,
             list_inbox_messages,
+            search_inbox_messages,
             get_message_detail,
             assign_message_read_state,
+            begin_attachment_download,
+            get_attachment_download_status,
+            cancel_attachment_download,
             fetch_message_remote_image,
             open_confirmed_external_url
         ])

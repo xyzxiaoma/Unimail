@@ -6,31 +6,63 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
+use unicode_normalization::UnicodeNormalization;
 use unimail_core::{
     Account, AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult,
-    AccountCreateInput, AccountId, AddressRole, Attachment, AttachmentId,
-    AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
-    CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput, ComposedMessage, CredentialRef,
-    CredentialStore, DeleteAccountResult, DeliveryEnvelope, DesiredReadMutation,
-    DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput, DraftId, DraftSaveInput,
-    DraftSendReview, DraftSendReviewKey, DraftSendReviewReason, DraftSummary, DurableCheckpoint,
-    InboxListInput, InitialSyncLimit, LeaseRecoveryResult, Mailbox, MailboxId, MailboxRole,
-    MailboxUpsertInput, MessageAddress, MessageAddressInput, MessageDetail, MessageDirection,
-    MessageId, MessageListInput, MessagePage, MessagePageCursor, MessageReadStateInput,
-    MessageSummary, MessageUpsertInput, MessageUpsertResult, MimeAddressRole,
-    OfflineDraftReviewInput, OfflineDraftReviewResult, OpaqueProviderCursor, OperationId,
-    OperationLease, OutboundAttempt, OutboundAttemptId, OutboundAttemptOutcome,
+    AccountCreateInput, AccountId, AddressRole, Attachment, AttachmentDownloadSource, AttachmentId,
+    AttachmentVerificationInput, AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput,
+    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput,
+    ComposedMessage, CredentialRef, CredentialStore, DeleteAccountResult, DeliveryEnvelope,
+    DesiredReadMutation, DesiredReadMutationState, Draft, DraftAddress, DraftAttachmentInput,
+    DraftId, DraftSaveInput, DraftSendReview, DraftSendReviewKey, DraftSendReviewReason,
+    DraftSummary, DurableCheckpoint, InboxListInput, InitialSyncLimit, LeaseRecoveryResult,
+    Mailbox, MailboxId, MailboxRole, MailboxUpsertInput, MessageAddress, MessageAddressInput,
+    MessageDetail, MessageDirection, MessageId, MessageListInput, MessagePage, MessagePageCursor,
+    MessageReadStateInput, MessageSummary, MessageUpsertInput, MessageUpsertResult,
+    MimeAddressRole, OfflineDraftReviewInput, OfflineDraftReviewResult, OpaqueProviderCursor,
+    OperationId, OperationLease, OutboundAttempt, OutboundAttemptId, OutboundAttemptOutcome,
     OutboundAttemptSnapshot, OutboundAttemptState, OutboundFailureCode,
     PrepareOutboundAttemptInput, Provider, ProviderRevision, ReadIntentGeneration,
     ReconcileOutboundAttemptInput, RecordSentRefreshInput, RemoteChange, RemoteMailbox,
     RemoteMessage, RemoteMessageKey, ReplySource, RepositoryError, RepositoryResult, SafeErrorCode,
-    ScheduleSyncInput, SendConfirmationRequired, SentProjection, StorageRepository, StorageStatus,
-    SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode, SyncOperation,
-    SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
+    ScheduleSyncInput, SearchMessageCursor, SearchMessageHit, SearchMessagePage,
+    SearchMessagesInput, SendConfirmationRequired, SentProjection, StorageRepository,
+    StorageStatus, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncMode,
+    SyncOperation, SyncOperationSummary, SyncStage, SyncState, SyncTrigger, SyncTriggerSet,
     TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
 use crate::{ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError};
+
+const SEARCH_DOCUMENT_VERSION: u32 = 1;
+const MAX_SEARCH_TERMS: usize = 48;
+const MAX_SEARCH_CONTEXT_CHARS: usize = 180;
+const ATTACHMENT_PARTIAL_PREFIX: &str = ".unimail-part-";
+
+/// Backend-only file transfer created and tracked by encrypted storage.
+pub struct AttachmentTransfer {
+    operation_id: OperationId,
+    file: Option<fs::File>,
+    temporary_path: PathBuf,
+    destination_path: PathBuf,
+}
+
+impl AttachmentTransfer {
+    /// Moves the newly created file handle into an asynchronous attachment sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe repository category if the handle was already consumed.
+    pub fn take_file(&mut self) -> RepositoryResult<fs::File> {
+        self.file.take().ok_or(RepositoryError::ConstraintViolation)
+    }
+
+    /// Returns the backend-only operation identifier.
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+}
 
 /// `SQLCipher` implementation of Unimail's synchronous repository port.
 pub struct SqlCipherRepository {
@@ -84,6 +116,8 @@ impl SqlCipherRepository {
         };
         repository.resume_pending_cleanups()?;
         repository.drain_attachment_cleanup()?;
+        repository.resume_attachment_transfers()?;
+        repository.ensure_search_index()?;
         Ok(repository)
     }
 
@@ -109,12 +143,13 @@ impl SqlCipherRepository {
     ///
     /// Returns a safe repository category if the query or stored IDs are invalid.
     pub fn search_message_ids(&self, query: &str, limit: u32) -> RepositoryResult<Vec<MessageId>> {
+        let query = build_fts_query(query).map_err(map_storage_error)?;
         self.store
             .with_connection(|connection| {
                 let mut statement = connection
                     .prepare(
-                        "SELECT m.id FROM email_fts f
-                         JOIN messages m ON m.row_id = f.message_row_id
+                        "SELECT m.id FROM email_fts
+                         JOIN messages m ON m.row_id = email_fts.message_row_id
                          WHERE email_fts MATCH ?1 ORDER BY rank LIMIT ?2",
                     )
                     .map_err(|error| StorageError::from_sql(&error))?;
@@ -132,29 +167,165 @@ impl SqlCipherRepository {
             .map_err(map_storage_error)
     }
 
-    /// Rebuilds the repository-owned full-text projection from normalized message rows.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe repository category and rolls back if rebuilding fails.
-    pub fn rebuild_search_index(&self) -> RepositoryResult<()> {
-        self.store
-            .with_transaction(|transaction| {
-                transaction
-                    .execute_batch(
-                        "DELETE FROM email_fts;
-                         INSERT INTO email_fts(message_row_id, subject, body, sender)
-                         SELECT m.row_id, m.subject,
-                                coalesce(m.body_plain, '') || ' ' || coalesce(m.body_html, ''),
-                                coalesce((SELECT coalesce(a.display_name, '') || ' ' || a.address
-                                          FROM message_addresses a
-                                          WHERE a.message_id=m.id AND a.role='from'
-                                          ORDER BY a.position LIMIT 1), '')
-                         FROM messages m;",
+    fn ensure_search_index(&self) -> RepositoryResult<()> {
+        let version = self
+            .store
+            .with_connection(|connection| {
+                connection
+                    .query_row(
+                        "SELECT document_version FROM search_index_state WHERE singleton=1",
+                        [],
+                        |row| row.get::<_, u32>(0),
                     )
                     .map_err(|error| StorageError::from_sql(&error))
             })
+            .map_err(map_storage_error)?;
+        if version < SEARCH_DOCUMENT_VERSION {
+            self.rebuild_search_index()?;
+        }
+        Ok(())
+    }
+
+    /// Creates one no-clobber transfer file and records it for restart cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe repository category when the destination is unsafe, occupied, or unwritable.
+    pub fn begin_attachment_transfer(
+        &self,
+        operation_id: OperationId,
+        destination_path: impl Into<PathBuf>,
+        created_at_ms: i64,
+    ) -> RepositoryResult<AttachmentTransfer> {
+        let destination_path = destination_path.into();
+        if created_at_ms < 0 || destination_path.file_name().is_none() {
+            return Err(RepositoryError::ConstraintViolation);
+        }
+        match fs::symlink_metadata(&destination_path) {
+            Ok(_) => return Err(RepositoryError::ConstraintViolation),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(RepositoryError::Internal),
+        }
+        let parent = destination_path
+            .parent()
+            .ok_or(RepositoryError::ConstraintViolation)?;
+        let parent_metadata =
+            fs::symlink_metadata(parent).map_err(|_| RepositoryError::ConstraintViolation)?;
+        if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+            return Err(RepositoryError::ConstraintViolation);
+        }
+        let temporary_path = parent.join(format!("{ATTACHMENT_PARTIAL_PREFIX}{operation_id}"));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::AlreadyExists => RepositoryError::ConstraintViolation,
+                _ => RepositoryError::Internal,
+            })?;
+        let Some(temporary_path_text) = temporary_path.to_str() else {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(RepositoryError::ConstraintViolation);
+        };
+        let recorded = self.store.with_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO attachment_transfer_cleanup(operation_id, temporary_path, created_at_ms)
+                     VALUES (?1, ?2, ?3)",
+                    params![operation_id.to_string(), temporary_path_text, created_at_ms],
+                )
+                .map_err(|error| StorageError::from_sql(&error))?;
+            Ok(())
+        });
+        if let Err(error) = recorded {
+            drop(file);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(map_storage_error(error));
+        }
+        Ok(AttachmentTransfer {
+            operation_id,
+            file: Some(file),
+            temporary_path,
+            destination_path,
+        })
+    }
+
+    /// Deletes one incomplete transfer and clears its encrypted cleanup record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe cleanup category when deletion cannot be completed.
+    pub fn abort_attachment_transfer(&self, transfer: &AttachmentTransfer) -> RepositoryResult<()> {
+        remove_owned_transfer_file(&transfer.temporary_path)?;
+        self.clear_attachment_transfer(transfer.operation_id)
+    }
+
+    /// Publishes a fully flushed transfer without overwriting an existing destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe constraint category for collisions or cleanup category for incomplete cleanup.
+    pub fn finish_attachment_transfer(
+        &self,
+        transfer: &AttachmentTransfer,
+    ) -> RepositoryResult<()> {
+        if transfer.file.is_some() {
+            return Err(RepositoryError::ConstraintViolation);
+        }
+        fs::hard_link(&transfer.temporary_path, &transfer.destination_path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                RepositoryError::ConstraintViolation
+            } else {
+                RepositoryError::Internal
+            }
+        })?;
+        remove_owned_transfer_file(&transfer.temporary_path)?;
+        self.clear_attachment_transfer(transfer.operation_id)
+    }
+
+    fn clear_attachment_transfer(&self, operation_id: OperationId) -> RepositoryResult<()> {
+        self.store
+            .with_connection(|connection| {
+                connection
+                    .execute(
+                        "DELETE FROM attachment_transfer_cleanup WHERE operation_id=?1",
+                        [operation_id.to_string()],
+                    )
+                    .map_err(|error| StorageError::from_sql(&error))?;
+                Ok(())
+            })
             .map_err(map_storage_error)
+    }
+
+    fn resume_attachment_transfers(&self) -> RepositoryResult<()> {
+        let entries = self
+            .store
+            .with_connection(|connection| {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT operation_id, temporary_path
+                         FROM attachment_transfer_cleanup ORDER BY created_at_ms, operation_id",
+                    )
+                    .map_err(|error| StorageError::from_sql(&error))?;
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|error| StorageError::from_sql(&error))?
+                    .map(|row| row.map_err(|error| StorageError::from_sql(&error)))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(map_storage_error)?;
+        for (operation_id, path) in entries {
+            let operation_id =
+                OperationId::from_str(&operation_id).map_err(|_| RepositoryError::InvalidData)?;
+            let path = PathBuf::from(path);
+            if is_owned_transfer_path(&path) {
+                remove_owned_transfer_file(&path)?;
+            }
+            self.clear_attachment_transfer(operation_id)?;
+        }
+        Ok(())
     }
 
     fn resume_pending_cleanups(&self) -> RepositoryResult<()> {
@@ -493,6 +664,39 @@ impl StorageRepository for SqlCipherRepository {
     fn list_inbox_messages(&self, input: &InboxListInput) -> RepositoryResult<MessagePage> {
         self.store
             .with_connection(|connection| list_inbox_messages(connection, input))
+            .map_err(map_storage_error)
+    }
+
+    fn search_inbox_messages(
+        &self,
+        input: &SearchMessagesInput,
+    ) -> RepositoryResult<SearchMessagePage> {
+        self.store
+            .with_connection(|connection| search_inbox_messages(connection, input))
+            .map_err(map_storage_error)
+    }
+
+    fn rebuild_search_index(&self) -> RepositoryResult<()> {
+        self.store
+            .with_transaction(|transaction| rebuild_search_index(transaction))
+            .map_err(map_storage_error)
+    }
+
+    fn get_attachment_download_source(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> RepositoryResult<Option<AttachmentDownloadSource>> {
+        self.store
+            .with_connection(|connection| get_attachment_download_source(connection, attachment_id))
+            .map_err(map_storage_error)
+    }
+
+    fn record_attachment_verification(
+        &self,
+        input: AttachmentVerificationInput,
+    ) -> RepositoryResult<()> {
+        self.store
+            .with_transaction(|transaction| record_attachment_verification(transaction, &input))
             .map_err(map_storage_error)
     }
 
@@ -1205,16 +1409,16 @@ fn upsert_message(
     let body = format!(
         "{} {}",
         input.plain_body.as_deref().unwrap_or_default(),
-        input.html_body.as_deref().unwrap_or_default()
+        strip_html(input.html_body.as_deref().unwrap_or_default())
     );
     connection
         .execute(
             "INSERT INTO email_fts(message_row_id, subject, body, sender) VALUES (?1, ?2, ?3, ?4)",
             params![
                 row_id,
-                input.subject.as_deref().unwrap_or_default(),
-                body,
-                sender
+                search_document(input.subject.as_deref().unwrap_or_default()),
+                search_document(&body),
+                search_document(&sender)
             ],
         )
         .map_err(|error| StorageError::from_sql(&error))?;
@@ -1443,6 +1647,328 @@ fn list_inbox_messages(
     Ok(MessagePage { items, next })
 }
 
+type SearchRow = (SummaryRow, Option<String>, Option<String>, i64);
+
+#[allow(clippy::too_many_lines)]
+fn search_inbox_messages(
+    connection: &Connection,
+    input: &SearchMessagesInput,
+) -> Result<SearchMessagePage, StorageError> {
+    let fts_query = build_fts_query(&input.query)?;
+    let limit = input.limit.clamp(1, 100);
+    let account_id = input.account_id.map(|id| id.to_string());
+    let after_rank = input.after.map(|cursor| cursor.rank_key);
+    let after_time = input.after.map(|cursor| cursor.received_at_ms);
+    let after_id = input.after.map(|cursor| cursor.message_id.to_string());
+    let mut statement = connection
+        .prepare(
+            "WITH ranked AS (
+                SELECT m.id, m.account_id, m.mailbox_id, m.subject, m.snippet,
+                       (SELECT display_name FROM message_addresses ma
+                        WHERE ma.message_id=m.id AND ma.role='from' ORDER BY position LIMIT 1)
+                           AS sender_name,
+                       (SELECT address FROM message_addresses ma
+                        WHERE ma.message_id=m.id AND ma.role='from' ORDER BY position LIMIT 1)
+                           AS sender_address,
+                       m.is_read, m.direction, m.sent_at_ms, m.received_at_ms,
+                       EXISTS(SELECT 1 FROM attachments x WHERE x.message_id=m.id)
+                           AS has_attachments,
+                       m.body_plain, m.body_html,
+                       CAST(bm25(email_fts, 0.0, 8.0, 1.0, 4.0) * 1000000000.0 AS INTEGER) AS rank_key
+                FROM email_fts
+                JOIN messages m ON m.row_id=email_fts.message_row_id
+                JOIN mailboxes mb ON mb.id=m.mailbox_id AND mb.account_id=m.account_id
+                JOIN accounts a ON a.id=m.account_id
+                WHERE email_fts MATCH ?1
+                  AND mb.role='inbox'
+                  AND a.enabled=1
+                  AND a.deleting=0
+                  AND (?2 IS NULL OR m.account_id=?2)
+                  AND (?3=0 OR m.is_read=0)
+            )
+            SELECT id, account_id, mailbox_id, subject, snippet,
+                   sender_name, sender_address, is_read, direction, sent_at_ms,
+                   received_at_ms, has_attachments, body_plain, body_html, rank_key
+            FROM ranked
+            WHERE ?4 IS NULL OR rank_key > ?4
+               OR (rank_key = ?4 AND (received_at_ms < ?5
+                   OR (received_at_ms = ?5 AND id < ?6)))
+            ORDER BY rank_key ASC, received_at_ms DESC, id DESC
+            LIMIT ?7",
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let rows = statement
+        .query_map(
+            params![
+                fts_query,
+                account_id,
+                input.unread_only,
+                after_rank,
+                after_time,
+                after_id,
+                i64::from(limit) + 1,
+            ],
+            |row| {
+                Ok((
+                    (
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                    ),
+                    row.get(12)?,
+                    row.get(13)?,
+                    row.get(14)?,
+                ))
+            },
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let mut items = rows
+        .map(|row| {
+            let row: SearchRow = row.map_err(|error| StorageError::from_sql(&error))?;
+            let summary = summary_from_row(row.0)?;
+            let match_context = search_match_context(
+                &input.query,
+                summary.subject.as_deref(),
+                summary.sender_name.as_deref(),
+                summary.sender_address.as_deref(),
+                row.1.as_deref(),
+                row.2.as_deref(),
+            );
+            Ok(SearchMessageHit {
+                summary,
+                match_context,
+                rank_key: row.3,
+            })
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    let has_more = items.len() > limit as usize;
+    items.truncate(limit as usize);
+    let scope_hash =
+        unimail_core::search_scope_hash(&input.query, input.account_id, input.unread_only);
+    let next = if has_more {
+        items.last().map(|last| SearchMessageCursor {
+            scope_hash,
+            rank_key: last.rank_key,
+            received_at_ms: last.summary.received_at_ms,
+            message_id: last.summary.id,
+        })
+    } else {
+        None
+    };
+    Ok(SearchMessagePage { items, next })
+}
+
+fn build_fts_query(query: &str) -> Result<String, StorageError> {
+    let terms = search_tokens(query, MAX_SEARCH_TERMS + 1);
+    if terms.is_empty() || terms.len() > MAX_SEARCH_TERMS {
+        return Err(StorageError::Serialization);
+    }
+    Ok(terms
+        .into_iter()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND "))
+}
+
+fn search_document(value: &str) -> String {
+    search_tokens(value, 4096).join(" ")
+}
+
+fn search_tokens(value: &str, maximum: usize) -> Vec<String> {
+    let normalized = value
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    let mut terms = Vec::new();
+    let mut ordinary = String::new();
+    let mut cjk = Vec::new();
+
+    let flush_ordinary = |ordinary: &mut String, terms: &mut Vec<String>| {
+        if !ordinary.is_empty() && terms.len() < maximum {
+            terms.push(std::mem::take(ordinary));
+        }
+    };
+    let flush_cjk = |cjk: &mut Vec<char>, terms: &mut Vec<String>| {
+        if cjk.is_empty() {
+            return;
+        }
+        for width in 1..=3 {
+            for window in cjk.windows(width) {
+                if terms.len() >= maximum {
+                    cjk.clear();
+                    return;
+                }
+                let token = window.iter().collect::<String>();
+                if !terms.contains(&token) {
+                    terms.push(token);
+                }
+            }
+        }
+        cjk.clear();
+    };
+
+    for character in normalized.chars() {
+        if is_cjk(character) {
+            flush_ordinary(&mut ordinary, &mut terms);
+            cjk.push(character);
+        } else if character.is_alphanumeric() {
+            flush_cjk(&mut cjk, &mut terms);
+            ordinary.push(character);
+        } else {
+            flush_ordinary(&mut ordinary, &mut terms);
+            flush_cjk(&mut cjk, &mut terms);
+        }
+        if terms.len() >= maximum {
+            break;
+        }
+    }
+    flush_ordinary(&mut ordinary, &mut terms);
+    flush_cjk(&mut cjk, &mut terms);
+    terms.truncate(maximum);
+    terms
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
+    )
+}
+
+fn search_match_context(
+    query: &str,
+    subject: Option<&str>,
+    sender_name: Option<&str>,
+    sender_address: Option<&str>,
+    plain_body: Option<&str>,
+    html_body: Option<&str>,
+) -> Option<String> {
+    let query_terms = search_tokens(query, MAX_SEARCH_TERMS);
+    let sender = format!(
+        "{} {}",
+        sender_name.unwrap_or_default(),
+        sender_address.unwrap_or_default()
+    );
+    let candidates = [
+        subject.unwrap_or_default().to_owned(),
+        sender,
+        plain_body.unwrap_or_default().to_owned(),
+        strip_html(html_body.unwrap_or_default()),
+    ];
+    let selected = candidates.iter().find(|candidate| {
+        let normalized_candidate = candidate
+            .nfkc()
+            .flat_map(char::to_lowercase)
+            .collect::<String>();
+        query_terms
+            .iter()
+            .any(|term| normalized_candidate.contains(term))
+    })?;
+    let collapsed = selected.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    let mut characters = collapsed.chars();
+    let prefix = characters
+        .by_ref()
+        .take(MAX_SEARCH_CONTEXT_CHARS)
+        .collect::<String>();
+    if characters.next().is_some() {
+        Some(format!("{prefix}…"))
+    } else {
+        Some(prefix)
+    }
+}
+
+fn strip_html(value: &str) -> String {
+    let mut plain = String::with_capacity(value.len());
+    let mut in_tag = false;
+    for character in value.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                plain.push(' ');
+            }
+            _ if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+    plain
+}
+
+fn rebuild_search_index(connection: &Connection) -> Result<(), StorageError> {
+    type SearchDocumentRow = (i64, String, Option<String>, Option<String>, String);
+    let rows = {
+        let mut statement = connection
+            .prepare(
+                "SELECT m.row_id, m.subject, m.body_plain, m.body_html,
+                        coalesce((SELECT coalesce(a.display_name, '') || ' ' || a.address
+                                  FROM message_addresses a
+                                  WHERE a.message_id=m.id AND a.role IN ('from', 'sender')
+                                  ORDER BY CASE a.role WHEN 'from' THEN 0 ELSE 1 END,
+                                           a.position LIMIT 1), '')
+                 FROM messages m ORDER BY m.row_id",
+            )
+            .map_err(|error| StorageError::from_sql(&error))?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(|error| StorageError::from_sql(&error))?
+            .map(|row| row.map_err(|error| StorageError::from_sql(&error)))
+            .collect::<Result<Vec<SearchDocumentRow>, StorageError>>()?
+    };
+    connection
+        .execute("DELETE FROM email_fts", [])
+        .map_err(|error| StorageError::from_sql(&error))?;
+    for (row_id, subject, plain_body, html_body, sender) in rows {
+        let body = format!(
+            "{} {}",
+            plain_body.as_deref().unwrap_or_default(),
+            strip_html(html_body.as_deref().unwrap_or_default())
+        );
+        connection
+            .execute(
+                "INSERT INTO email_fts(message_row_id, subject, body, sender)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    row_id,
+                    search_document(&subject),
+                    search_document(&body),
+                    search_document(&sender),
+                ],
+            )
+            .map_err(|error| StorageError::from_sql(&error))?;
+    }
+    connection
+        .execute(
+            "UPDATE search_index_state SET document_version=?1 WHERE singleton=1",
+            [SEARCH_DOCUMENT_VERSION],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    Ok(())
+}
+
 fn summary_from_row(row: SummaryRow) -> Result<MessageSummary, StorageError> {
     Ok(MessageSummary {
         id: parse_id(&row.0)?,
@@ -1458,6 +1984,133 @@ fn summary_from_row(row: SummaryRow) -> Result<MessageSummary, StorageError> {
         received_at_ms: row.10,
         has_attachments: row.11,
     })
+}
+
+fn get_attachment_download_source(
+    connection: &Connection,
+    attachment_id: AttachmentId,
+) -> Result<Option<AttachmentDownloadSource>, StorageError> {
+    type SourceRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<i64>,
+        Option<String>,
+    );
+    connection
+        .query_row(
+            "SELECT x.id, x.message_id, m.account_id, a.provider,
+                    mb.provider_mailbox_id, m.provider_message_id, x.provider_part_id,
+                    x.filename, x.media_type, x.size_bytes, x.checksum_sha256
+             FROM attachments x
+             JOIN messages m ON m.id=x.message_id
+             JOIN mailboxes mb ON mb.id=m.mailbox_id AND mb.account_id=m.account_id
+             JOIN accounts a ON a.id=m.account_id
+             WHERE x.id=?1
+               AND x.is_inline=0
+               AND x.provider_part_id IS NOT NULL
+               AND x.provider_part_id<>''
+               AND mb.role='inbox'
+               AND a.enabled=1
+               AND a.deleting=0",
+            [attachment_id.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?
+        .map(|row: SourceRow| {
+            let account_id = parse_id(&row.2)?;
+            let size_bytes = row
+                .9
+                .map(|value| u64::try_from(value).map_err(|_| StorageError::Serialization))
+                .transpose()?;
+            Ok(AttachmentDownloadSource {
+                attachment_id: parse_id(&row.0)?,
+                message_id: parse_id(&row.1)?,
+                account_id,
+                provider: provider_from_str(&row.3)?,
+                key: RemoteMessageKey {
+                    account_id,
+                    provider_mailbox_id: row.4,
+                    provider_message_id: row.5,
+                },
+                provider_part_id: row.6,
+                file_name: row.7,
+                media_type: row.8,
+                size_bytes,
+                checksum_sha256: row.10,
+            })
+        })
+        .transpose()
+}
+
+fn record_attachment_verification(
+    connection: &Connection,
+    input: &AttachmentVerificationInput,
+) -> Result<(), StorageError> {
+    if !is_sha256(&input.checksum_sha256) {
+        return Err(StorageError::Serialization);
+    }
+    let size_bytes = i64::try_from(input.size_bytes).map_err(|_| StorageError::Constraint)?;
+    let existing = connection
+        .query_row(
+            "SELECT size_bytes, checksum_sha256 FROM attachments WHERE id=?1",
+            [input.attachment_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| StorageError::from_sql(&error))?
+        .ok_or(StorageError::NotFound)?;
+    if existing.0.is_some_and(|value| value != size_bytes)
+        || existing
+            .1
+            .as_deref()
+            .is_some_and(|value| !value.eq_ignore_ascii_case(&input.checksum_sha256))
+    {
+        return Err(StorageError::Constraint);
+    }
+    connection
+        .execute(
+            "UPDATE attachments
+             SET size_bytes=?2, checksum_sha256=?3
+             WHERE id=?1",
+            params![
+                input.attachment_id.to_string(),
+                size_bytes,
+                input.checksum_sha256.to_ascii_lowercase(),
+            ],
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn get_message(
@@ -3740,17 +4393,42 @@ fn refresh_message_fts(connection: &Connection, message_id: MessageId) -> Result
             [message_id.to_string()],
         )
         .map_err(|error| StorageError::from_sql(&error))?;
-    connection
-        .execute(
-            "INSERT INTO email_fts(message_row_id, subject, body, sender)
-             SELECT m.row_id, m.subject,
-                    coalesce(m.body_plain, '') || ' ' || coalesce(m.body_html, ''),
+    let row = connection
+        .query_row(
+            "SELECT m.row_id, m.subject, m.body_plain, m.body_html,
                     coalesce((SELECT coalesce(a.display_name, '') || ' ' || a.address
                               FROM message_addresses a
                               WHERE a.message_id=m.id AND a.role IN ('from', 'sender')
-                              ORDER BY CASE a.role WHEN 'from' THEN 0 ELSE 1 END, a.position LIMIT 1), '')
+                              ORDER BY CASE a.role WHEN 'from' THEN 0 ELSE 1 END,
+                                       a.position LIMIT 1), '')
              FROM messages m WHERE m.id=?1",
             [message_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .map_err(|error| StorageError::from_sql(&error))?;
+    let body = format!(
+        "{} {}",
+        row.2.as_deref().unwrap_or_default(),
+        strip_html(row.3.as_deref().unwrap_or_default())
+    );
+    connection
+        .execute(
+            "INSERT INTO email_fts(message_row_id, subject, body, sender)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                row.0,
+                search_document(&row.1),
+                search_document(&body),
+                search_document(&row.4),
+            ],
         )
         .map_err(|error| StorageError::from_sql(&error))?;
     Ok(())
@@ -3934,6 +4612,24 @@ fn validate_cache_key(cache_key: &str) -> Result<(), StorageError> {
         Err(StorageError::Constraint)
     } else {
         Ok(())
+    }
+}
+
+fn is_owned_transfer_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.starts_with(ATTACHMENT_PARTIAL_PREFIX))
+}
+
+fn remove_owned_transfer_file(path: &Path) -> RepositoryResult<()> {
+    if !is_owned_transfer_path(path) {
+        return Err(RepositoryError::ConstraintViolation);
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Ok(()),
+        Ok(_) => fs::remove_file(path).map_err(|_| RepositoryError::CleanupPending),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RepositoryError::CleanupPending),
     }
 }
 
@@ -4158,27 +4854,27 @@ fn map_storage_error(error: StorageError) -> RepositoryError {
 
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, sync::Arc};
+    use std::{io::Write, str::FromStr, sync::Arc};
 
     use secrecy::SecretBox;
     use tempfile::TempDir;
     use unimail_core::{
         AccountAuthState, AccountAuthUpdateInput, AccountConnectInput, AccountCreateInput,
-        AccountId, AddressRole, AttachmentId, AttachmentInput, ClaimDesiredReadMutationInput,
-        ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CredentialRef, CredentialStore,
-        DesiredReadMutationState, DraftAddress, DraftId, DraftSaveInput, DraftSendReviewKey,
-        DurableCheckpoint, InboxListInput, InitialSyncLimit, LeaseId, MailboxId, MailboxRole,
-        MailboxUpsertInput, MessageAddressInput, MessageDirection, MessageId, MessageListInput,
-        MessageReadStateInput, MessageUpsertInput, MimeAddress, MimeAddressEntry, MimeAddressRole,
-        MimeBody, NormalizedMimeMessage, OfflineDraftReviewInput, OpaqueProviderCursor,
-        OperationId, OperationLease, Provider, ProviderRevision, RemoteChange, RemoteMailbox,
-        RemoteMailboxKey, RemoteMessage, RemoteMessageKey, RepositoryError, SafeErrorCode,
-        ScheduleSyncInput, StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursorKey,
-        SyncMode, SyncState, SyncTrigger, TransitionDesiredReadMutationInput,
-        TransitionSyncOperationInput,
+        AccountId, AddressRole, AttachmentId, AttachmentInput, AttachmentVerificationInput,
+        ClaimDesiredReadMutationInput, ClaimSyncOperationInput, CompleteDesiredReadMutationInput,
+        CredentialRef, CredentialStore, DesiredReadMutationState, DraftAddress, DraftId,
+        DraftSaveInput, DraftSendReviewKey, DurableCheckpoint, InboxListInput, InitialSyncLimit,
+        LeaseId, MailboxId, MailboxRole, MailboxUpsertInput, MessageAddressInput, MessageDirection,
+        MessageId, MessageListInput, MessageReadStateInput, MessageUpsertInput, MimeAddress,
+        MimeAddressEntry, MimeAddressRole, MimeBody, NormalizedMimeMessage,
+        OfflineDraftReviewInput, OpaqueProviderCursor, OperationId, OperationLease, Provider,
+        ProviderRevision, RemoteChange, RemoteMailbox, RemoteMailboxKey, RemoteMessage,
+        RemoteMessageKey, RepositoryError, SafeErrorCode, ScheduleSyncInput, SearchMessagesInput,
+        StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursorKey, SyncMode, SyncState,
+        SyncTrigger, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
     };
 
-    use super::SqlCipherRepository;
+    use super::{ATTACHMENT_PARTIAL_PREFIX, SqlCipherRepository};
     use crate::FakeCredentialStore;
 
     struct Fixture {
@@ -4746,6 +5442,192 @@ mod tests {
         assert_eq!(
             inbox_ids(&after_delete_started),
             [scenario.first_same_time, scenario.second_same_time]
+        );
+    }
+
+    #[test]
+    fn local_search_is_safe_cjk_capable_scoped_and_paged() {
+        let scenario = seed_unified_inbox_scenario();
+        let first = scenario
+            .fixture
+            .repository
+            .search_inbox_messages(&SearchMessagesInput {
+                query: "未读".to_owned(),
+                account_id: None,
+                unread_only: false,
+                after: None,
+                limit: 1,
+            })
+            .expect("first search page");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].summary.id, scenario.outlook_message);
+        assert!(first.items[0].match_context.is_some());
+        let second = scenario
+            .fixture
+            .repository
+            .search_inbox_messages(&SearchMessagesInput {
+                query: "未读".to_owned(),
+                account_id: None,
+                unread_only: false,
+                after: first.next,
+                limit: 1,
+            })
+            .expect("second search page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].summary.id, scenario.first_same_time);
+
+        let gmail_only = scenario
+            .fixture
+            .repository
+            .search_inbox_messages(&SearchMessagesInput {
+                query: "sender example test".to_owned(),
+                account_id: Some(scenario.fixture.account_id),
+                unread_only: true,
+                after: None,
+                limit: 100,
+            })
+            .expect("account-scoped sender search");
+        assert_eq!(gmail_only.items.len(), 1);
+        assert_eq!(gmail_only.items[0].summary.id, scenario.first_same_time);
+
+        let operator_text = scenario
+            .fixture
+            .repository
+            .search_inbox_messages(&SearchMessagesInput {
+                query: "\" OR * NEAR(".to_owned(),
+                account_id: None,
+                unread_only: false,
+                after: None,
+                limit: 100,
+            })
+            .expect("operators are literal terms");
+        assert!(operator_text.items.is_empty());
+    }
+
+    #[test]
+    fn attachment_source_and_verification_are_safe() {
+        let fixture = fixture();
+        let attachment_id = AttachmentId::new();
+        let mut input = message(
+            MessageId::new(),
+            fixture.account_id,
+            fixture.mailbox_id,
+            "attachment-message",
+            "附件邮件",
+            10,
+        );
+        input.attachments.push(AttachmentInput {
+            id: attachment_id,
+            provider_part_id: Some("part-1".to_owned()),
+            file_name: Some("report.txt".to_owned()),
+            media_type: "text/plain".to_owned(),
+            size_bytes: Some(5),
+            content_id: None,
+            inline: false,
+            cache_key: None,
+            checksum_sha256: None,
+        });
+        fixture
+            .repository
+            .upsert_message(input)
+            .expect("seed attachment message");
+        let source = fixture
+            .repository
+            .get_attachment_download_source(attachment_id)
+            .expect("load attachment source")
+            .expect("attachment source");
+        assert_eq!(source.provider, Provider::Gmail);
+        assert_eq!(source.provider_part_id, "part-1");
+        assert_eq!(source.size_bytes, Some(5));
+
+        fixture
+            .repository
+            .record_attachment_verification(AttachmentVerificationInput {
+                attachment_id,
+                size_bytes: 5,
+                checksum_sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                    .to_owned(),
+            })
+            .expect("record verification");
+    }
+
+    #[test]
+    fn attachment_transfer_and_restart_cleanup_are_safe() {
+        let fixture = fixture();
+        let destination = fixture.directory.path().join("report.txt");
+        let mut transfer = fixture
+            .repository
+            .begin_attachment_transfer(OperationId::new(), &destination, 20)
+            .expect("begin transfer");
+        let mut file = transfer.take_file().expect("take transfer file");
+        file.write_all(b"hello").expect("write transfer");
+        file.sync_all().expect("sync transfer");
+        drop(file);
+        fixture
+            .repository
+            .finish_attachment_transfer(&transfer)
+            .expect("finish transfer");
+        assert_eq!(std::fs::read(&destination).expect("saved file"), b"hello");
+        assert!(matches!(
+            fixture
+                .repository
+                .begin_attachment_transfer(OperationId::new(), &destination, 21),
+            Err(RepositoryError::ConstraintViolation)
+        ));
+
+        let interrupted_destination = fixture.directory.path().join("interrupted.txt");
+        let mut interrupted = fixture
+            .repository
+            .begin_attachment_transfer(OperationId::new(), interrupted_destination, 22)
+            .expect("begin interrupted transfer");
+        interrupted
+            .take_file()
+            .expect("take interrupted file")
+            .write_all(b"partial")
+            .expect("write partial");
+        drop(interrupted);
+        let partial_before = std::fs::read_dir(fixture.directory.path())
+            .expect("list partial directory")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(ATTACHMENT_PARTIAL_PREFIX)
+            })
+            .count();
+        assert_eq!(partial_before, 1);
+        drop(fixture.repository);
+        SqlCipherRepository::initialize(
+            &fixture.path,
+            Arc::new(fixture.credentials.clone()) as Arc<dyn CredentialStore>,
+        )
+        .expect("restart repository");
+        let partial_after = std::fs::read_dir(fixture.directory.path())
+            .expect("list recovered directory")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(ATTACHMENT_PARTIAL_PREFIX)
+            })
+            .count();
+        assert_eq!(partial_after, 0);
+    }
+
+    #[test]
+    fn search_context_uses_the_field_that_contains_a_query_term() {
+        assert_eq!(
+            super::search_match_context(
+                "needle",
+                Some("unrelated subject"),
+                Some("unrelated sender"),
+                Some("sender@example.test"),
+                Some("leading needle body"),
+                None,
+            ),
+            Some("leading needle body".to_owned())
         );
     }
 

@@ -8,14 +8,15 @@ use std::{
 
 use time::{OffsetDateTime, format_description::well_known::Rfc2822};
 use unimail_application::{
-    Clock, ComposeStore, ConnectivityState, OutboundIdentity, OutboundIdentityGenerator,
-    RandomSource, StoreFuture, SyncStore,
+    AttachmentStore, Clock, ComposeStore, ConnectivityState, OutboundIdentity,
+    OutboundIdentityGenerator, RandomSource, StoreFuture, SyncStore,
 };
 use unimail_core::{
-    Account, AccountAuthUpdateInput, AccountId, ClaimDesiredReadMutationInput,
-    ClaimSyncOperationInput, CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput,
-    DesiredReadMutation, Draft, DraftId, DraftSaveInput, DraftSendReviewKey, LeaseRecoveryResult,
-    MessageId, OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, OutboundAttempt,
+    Account, AccountAuthUpdateInput, AccountId, AttachmentDownloadSource, AttachmentId,
+    AttachmentVerificationInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput, DesiredReadMutation, Draft,
+    DraftId, DraftSaveInput, DraftSendReviewKey, LeaseRecoveryResult, MessageId,
+    OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, OutboundAttempt,
     PrepareOutboundAttemptInput, Provider, ReconcileOutboundAttemptInput, RecordSentRefreshInput,
     ReplySource, RepositoryError, ScheduleSyncInput, SendConfirmationRequired, SentProjection,
     StorageRepository, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
@@ -249,6 +250,22 @@ impl ComposeStore for TokioSyncStore {
         input: ReconcileOutboundAttemptInput,
     ) -> StoreFuture<'_, OutboundAttempt> {
         self.blocking(move |repository| repository.reconcile_outbound_attempt(input))
+    }
+}
+
+impl AttachmentStore for TokioSyncStore {
+    fn get_attachment_download_source(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> StoreFuture<'_, Option<AttachmentDownloadSource>> {
+        self.blocking(move |repository| repository.get_attachment_download_source(attachment_id))
+    }
+
+    fn record_attachment_verification(
+        &self,
+        input: AttachmentVerificationInput,
+    ) -> StoreFuture<'_, ()> {
+        self.blocking(move |repository| repository.record_attachment_verification(input))
     }
 }
 

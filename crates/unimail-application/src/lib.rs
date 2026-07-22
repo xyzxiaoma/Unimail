@@ -1,5 +1,6 @@
 //! Runtime-neutral synchronization and offline-safety orchestration.
 
+mod attachment;
 mod compose;
 mod coordinator;
 mod permits;
@@ -21,6 +22,9 @@ use unimail_core::{
     TransitionSyncOperationInput,
 };
 
+pub use attachment::{
+    AttachmentDownloadService, AttachmentProvider, AttachmentServiceError, AttachmentStore,
+};
 pub use compose::{
     ComposeStore, ConnectivityState, ExplicitSendError, ExplicitSendProvider, ExplicitSendRequest,
     ExplicitSendResult, ExplicitSendService, OutboundIdentity, OutboundIdentityGenerator,

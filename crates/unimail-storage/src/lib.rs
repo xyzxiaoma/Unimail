@@ -12,7 +12,7 @@ mod repository;
 pub use credentials::{FakeCredentialStore, NativeCredentialStore};
 pub use database::{ConnectionFactory, EncryptedStore, StorageCapabilities};
 pub use error::StorageError;
-pub use repository::SqlCipherRepository;
+pub use repository::{AttachmentTransfer, SqlCipherRepository};
 
 /// Stable adapter name used by diagnostics.
 #[must_use]

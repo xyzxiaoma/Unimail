@@ -7,16 +7,18 @@ use ts_rs::TS;
 
 use crate::{
     Account, AccountAuthUpdateInput, AccountConnectInput, AccountConnectResult, AccountCreateInput,
-    AccountId, AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
+    AccountId, AttachmentDownloadSource, AttachmentId, AttachmentVerificationInput,
+    AuthorizeOutboundRetryInput, ClaimDesiredReadMutationInput, ClaimSyncOperationInput,
     CompleteDesiredReadMutationInput, CompleteOutboundAttemptInput, DeleteAccountResult,
     DesiredReadMutation, Draft, DraftId, DraftSaveInput, DraftSendReviewKey, DraftSummary,
     InboxListInput, LeaseRecoveryResult, Mailbox, MailboxUpsertInput, MessageDetail, MessageId,
     MessageListInput, MessagePage, MessageReadStateInput, MessageUpsertInput, MessageUpsertResult,
     OfflineDraftReviewInput, OfflineDraftReviewResult, OperationId, OutboundAttempt,
     OutboundAttemptId, PrepareOutboundAttemptInput, Provider, ReconcileOutboundAttemptInput,
-    RecordSentRefreshInput, ReplySource, ScheduleSyncInput, SendConfirmationRequired,
-    SentProjection, SyncBatchInput, SyncBatchResult, SyncCursor, SyncCursorKey, SyncOperation,
-    SyncOperationSummary, TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
+    RecordSentRefreshInput, ReplySource, ScheduleSyncInput, SearchMessagePage, SearchMessagesInput,
+    SendConfirmationRequired, SentProjection, SyncBatchInput, SyncBatchResult, SyncCursor,
+    SyncCursorKey, SyncOperation, SyncOperationSummary, TransitionDesiredReadMutationInput,
+    TransitionSyncOperationInput,
 };
 
 /// Owned secret bytes whose debug representation and formatting do not reveal the value.
@@ -327,6 +329,43 @@ pub trait StorageRepository: Send + Sync {
     ///
     /// Returns a repository category when storage cannot be queried.
     fn list_inbox_messages(&self, input: &InboxListInput) -> RepositoryResult<MessagePage>;
+
+    /// Searches one deterministic page of the local Inbox FTS projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when the request is invalid or storage cannot be queried.
+    fn search_inbox_messages(
+        &self,
+        input: &SearchMessagesInput,
+    ) -> RepositoryResult<SearchMessagePage>;
+
+    /// Rebuilds the repository-owned search projection from normalized message rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category and rolls back if rebuilding fails.
+    fn rebuild_search_index(&self) -> RepositoryResult<()>;
+
+    /// Resolves one backend-only source for an eligible received attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when storage cannot be queried or the source is invalid.
+    fn get_attachment_download_source(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> RepositoryResult<Option<AttachmentDownloadSource>>;
+
+    /// Records verified received-attachment metadata without persisting a destination or cache key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a repository category when verification metadata cannot be persisted safely.
+    fn record_attachment_verification(
+        &self,
+        input: AttachmentVerificationInput,
+    ) -> RepositoryResult<()>;
 
     /// Gets full normalized message detail.
     ///

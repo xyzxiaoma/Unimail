@@ -9,6 +9,7 @@ rust-version.workspace = true
 unimail-core = { path = "../unimail-core" }
 
 [dev-dependencies]
+tokio-test = "0.4"
 unimail-providers = { path = "../unimail-providers" }
 
 [lints]
