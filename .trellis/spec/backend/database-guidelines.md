@@ -61,9 +61,10 @@ the application database.
   read failure returns `CredentialStoreUnavailable`; neither condition generates a replacement.
   Only an existing database with SQLite `NotADatabase` after keying maps to
   `DatabaseKeyInvalid`.
-- Migrations V1 and V2 are immutable ordered files at `migrations/0001_initial.sql` and
-  `migrations/0002_sync_offline.sql`. Neither contains token, password, authorization-code, or
-  database-key columns.
+- Migrations V1 through V3 are immutable ordered files. V3 adds encrypted compose/send state:
+  exact drafts, outbound attempt snapshots, exact MIME bytes, terminal submission state,
+  Sent-refresh generations, retry authorization, and reconciliation identity. No migration contains
+  token, password, authorization-code, or database-key columns.
 - Stable UUIDs are text primary keys. Messages enforce both provider identity uniqueness and a
   composite `(account_id, mailbox_id)` foreign key, so a message cannot reference another
   account's mailbox.
@@ -92,12 +93,16 @@ the application database.
   accounts. Optional account/unread filters compose with the stable keyset
   `(received_at_ms, message_id)`, ordered descending. Sent rows, disabled accounts, and deleting
   accounts never appear; the Tauri or React layer must not merge per-account pages itself.
+- `reconcile_outbound_attempt` is one transaction: validate the attempt/account/Sent mailbox and
+  normalized RFC Message-ID, upsert the provider-observed mailbox/message as `outgoing`, update FTS,
+  mark the attempt `reconciled`, link the stable local message ID, and delete only the exact source
+  draft revision. Repeating the same observation is idempotent.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required repository result |
 | --- | --- |
-| New profile, credential store available | Generate/store one 32-byte key, migrate to latest V2 |
+| New profile, credential store available | Generate/store one 32-byte key, migrate to latest V3 |
 | Existing DB, credential entry missing | `DatabaseKeyUnavailable`; do not reset |
 | Credential backend locked/unavailable | `CredentialStoreUnavailable` |
 | Existing encrypted DB, wrong key (`NotADatabase`) | `DatabaseKeyInvalid` |
@@ -107,6 +112,7 @@ the application database.
 | SQLite busy/locked or poisoned connection mutex | `StorageBusy` |
 | Cross-account mailbox/message relation or reserved DB-key ref | `ConstraintViolation` |
 | Stale draft revision | `RevisionConflict` |
+| Reconciliation mailbox is not Sent, account differs, or Message-ID differs | `ConstraintViolation`; no partial message/attempt update |
 | Credential/cache cleanup cannot finish | Persist stage and return `CleanupPending` |
 
 Internal SQL, keyring, path, and OS errors are never returned verbatim.
@@ -133,6 +139,9 @@ Internal SQL, keyring, path, and OS errors are never returned verbatim.
   replay/Gone/reappearance, FTS update/rebuild/direct row count after
   cascade, draft revision conflict, desired-read generations, trigger consumption/follow-up,
   cancellation fencing, account-wide running-lease exclusion, and mid-batch cursor/data rollback.
+- Compose/send repository tests cover V3 restart recovery, exact MIME/Bcc snapshot retention,
+  accepted/rejected/unknown transitions, manual refresh and one-shot retry authorization, plus
+  transactional pending-to-provider-observed reconciliation with outgoing direction and idempotency.
 - Cleanup: credential failure, attachment deletion failure, restart recovery, queued-key reuse,
   protected account-cleanup key rejection, path escape rejection, and absent-file idempotency.
 - Keep the native keyring contract test `#[ignore]` and manual; it must use an ephemeral reference,

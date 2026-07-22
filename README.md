@@ -74,6 +74,10 @@ npm run tauri dev
 
 未配置该值时，Outlook 入口会显示安全的未配置状态，Gmail 和本地功能不受影响。Outlook V1 仅同步 Inbox：初次导入最新不超过 500 封邮件，随后使用 Microsoft Graph delta 收敛变化；文件和项目附件支持下载，云端引用附件会明确提示暂不支持。真实账号验收步骤见 [`doc/Outlook_Owner_Acceptance.zh-CN.md`](doc/Outlook_Owner_Acceptance.zh-CN.md)。
 
+## 写信、草稿与已发送验收
+
+连接任一支持的邮箱后，可通过“写邮件”或阅读器中的“回复”测试纯文本写信、本地草稿、离线保护和 Sent 对账。跨 Gmail、Outlook、QQ 与 163 的完整手工步骤见 [`doc/Compose_Send_Owner_Acceptance.zh-CN.md`](doc/Compose_Send_Owner_Acceptance.zh-CN.md)；测试时不要记录真实收件人、主题、正文、Message-ID、服务商邮件 ID 或授权信息。
+
 ## 质量检查
 
 提交前运行：

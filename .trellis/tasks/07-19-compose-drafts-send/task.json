@@ -3,7 +3,7 @@
   "name": "compose-drafts-send",
   "title": "Compose Drafts and Send",
   "description": "Implement compose, local drafts, reply, explicit sending, offline behavior, and Sent reconciliation.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

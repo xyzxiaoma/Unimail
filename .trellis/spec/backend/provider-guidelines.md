@@ -44,6 +44,7 @@ pub trait MailProvider: Send + Sync {
     fn fetch_attachment(... ) -> ProviderFuture<'_, AttachmentDownload>;
     fn set_read(... ) -> ProviderFuture<'_, ReadStateAck>;
     fn send(... ) -> ProviderFuture<'_, SendOutcome>;
+    fn find_sent(... ) -> ProviderFuture<'_, SentReconciliationResult>;
 }
 
 pub trait MimeCodec: Send + Sync {
@@ -104,6 +105,12 @@ and `async-trait`. Provider traits must remain usable through `Arc<dyn MailProvi
 - Exact composed bytes and the stable Message-ID are retained for any allowed retry/reconciliation.
 - `SendOutcome::{Accepted, Rejected, UnknownAfterSubmission}` are terminal outcomes.
   `UnknownAfterSubmission` is not a `ProviderError` and must never enter generic automatic retry.
+- `find_sent` is strictly read-only. It accepts an account-bound optional provider message ID plus
+  a redacted RFC Message-ID reconciliation key and returns `Pending` or one provider-observed Sent
+  mailbox/message pair. It must never call `send`, SMTP, reply, draft creation, or IMAP APPEND.
+- Gmail queries `SENT` and validates both provider ID when available and normalized RFC Message-ID;
+  Graph filters Sent Items by exact internet Message-ID; IMAP searches only the discovered Sent
+  mailbox by Message-ID. A missing match is `Pending`, not rejection and never a resend trigger.
 
 #### Diagnostics
 
@@ -127,6 +134,8 @@ Runtime logging is still absent; adding logging requires the separate logging-sp
 | Header injection, invalid Date/Message-ID/media type | `MimeErrorKind::InvalidInput` |
 | Visible To/Cc missing from envelope | `visible_recipient_missing` |
 | Disconnect after possible submission | `UnknownAfterSubmission`; never automatic retry |
+| Sent lookup has no exact provider observation | `SentReconciliationResult::Pending` |
+| Sent lookup finds a mailbox/message identity mismatch | Ignore the candidate or return a fixed protocol error; never reconcile it |
 
 `ProviderError`/`MimeError` codes are allowlisted static values. Do not pass through HTTP bodies,
 SMTP replies, IMAP frames, OAuth responses, parser debug output, or `io::Error::to_string()`.
@@ -141,7 +150,10 @@ SMTP replies, IMAP frames, OAuth responses, parser debug output, or `io::Error::
   durable delta checkpoint.
 - Good: a reply uses one explicit Message-ID, In-Reply-To, accumulated References, and exact MIME
   bytes; SMTP/API Bcc recipients remain envelope-only.
+- Good: a manual Sent refresh finds one exact remote message and returns it for transactional local
+  reconciliation without invoking submission.
 - Bad: a disconnect after SMTP DATA is returned as transient and automatically re-sent.
+- Bad: Sent refresh calls `send`, fabricates a remote row from local content, or enables IMAP APPEND.
 - Good: `set_read(true)` repeated against an already-read message is idempotent and does not create
   another remote mutation in the fake/conformance model.
 - Bad: provider adapters build `MessageUpsertInput` with freshly generated local UUIDs.
@@ -158,11 +170,15 @@ SMTP replies, IMAP frames, OAuth responses, parser debug output, or `io::Error::
   size failures return fixed safe codes.
 - Fake/conformance tests: `<=500`, pagination, duplicate delivery, invalid cursor, tombstone,
   idempotent desired read state, cancellation without checkpoint, streamed attachments, and each
-  `SendOutcome` without automatic ambiguous retry. Fake initial sync reconstructs a frozen scoped
+  `SendOutcome` without automatic ambiguous retry, plus read-only `find_sent` Found/Pending behavior.
+  Fake initial sync reconstructs a frozen scoped
   live-message snapshot at the continuation sequence, sorts newest-first with a stable tie-break,
   and never leaks another account/mailbox or later timeline changes into the snapshot.
 - Fixtures use reserved domains such as `example.com`/`unimail.invalid`; committed `.eml`/`.mbox`
   files are prohibited by the changed-path check.
+- Gmail tests assert `labelIds=SENT`, Message-ID search and no `/send`; Graph tests assert Sent Items
+  filtering and no `sendMail`; IMAP scripted tests assert discovered-Sent Message-ID search and no
+  APPEND.
 
 Required validation:
 
@@ -203,6 +219,12 @@ enum SendOutcome {
     Accepted(AcceptedSend),
     Rejected(RejectedSend),
     UnknownAfterSubmission(UnknownSend),
+}
+
+// Sent refresh is a separate read-only operation.
+enum SentReconciliationResult {
+    Pending,
+    Found { mailbox: RemoteMailbox, message: Box<RemoteMessage> },
 }
 ```
 

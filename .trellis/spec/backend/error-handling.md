@@ -306,6 +306,73 @@ let html = repository.get_message(message_id)?.and_then(|detail| detail.html_bod
 remote_image::fetch_remote_image(&html, requested_url).await
 ```
 
+## Scenario: Compose, explicit send, and Sent reconciliation IPC
+
+### 1. Scope / Trigger
+
+Apply when changing compose/draft/reply/send/Sent commands, DTOs, command registration, storage
+mapping, provider routing, or generated bindings.
+
+### 2. Signatures
+
+```rust
+list_drafts(account_id) -> Result<Vec<DraftSummaryV1>, ComposeCommandError>
+get_draft(draft_id) / save_draft(request) / create_reply_draft(message_id)
+send_draft(request) -> Result<ExplicitSendResultV1, ComposeCommandError>
+list_sent_items(account_id) -> Result<Vec<SentItemV1>, ComposeCommandError>
+refresh_sent_items(account_id) -> Result<SentRefreshResultV1, ComposeCommandError>
+authorize_outbound_retry(attempt_id) -> Result<RetryAuthorizationResultV1, ComposeCommandError>
+```
+
+### 3. Contracts
+
+- The frontend supplies local UUIDs, draft fields, exact revision, and explicit confirmation flags.
+  From, Date, Message-ID, provider thread/original IDs, exact MIME, and reconciliation keys remain
+  backend-owned.
+- `refresh_sent_items` resolves the local account/provider, calls only read-only `find_sent`, then
+  transactionally reconciles exact matches and records the manual refresh guard.
+- `ComposeCommandError` is one fixed `code/message/retryable` allowlist and never includes mail,
+  addresses, provider responses, raw MIME, SQL, paths, or credentials.
+
+### 4. Validation & Error Matrix
+
+| Condition | Public result |
+| --- | --- |
+| Malformed UUID/address/request combination | `invalid_data` |
+| Missing draft/message | `not_found` |
+| Stale revision | `revision_conflict` |
+| Missing/revoked/wrong provider account | `account_unavailable` |
+| Empty-subject/offline review confirmation absent | corresponding fixed confirmation code |
+| Ambiguous attempt still locked | `send_locked` |
+| SQLCipher unavailable | `storage_unavailable` |
+| Non-auth provider Sent lookup failure | fixed `internal`; no provider detail |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a reply command accepts only local message ID and reconstructs account/thread context in the
+  backend.
+- Base: Sent lookup returns Pending; the local waiting row remains and the refresh guard advances.
+- Bad: accepting arbitrary From/provider IDs from React, returning raw SMTP/HTTP/IMAP errors, or
+  calling `send` from the refresh command.
+
+### 6. Tests Required
+
+- Rust tests cover sender/reply ownership, validation, offline zero-call, all send outcomes, read-only
+  reconciliation, restart locks, and fixed error serialization.
+- Binding and frontend decoder tests reject malformed UUID/revision/state/error payloads.
+- Tauri routing tests prove the selected account chooses exactly one provider and Sent refresh cannot
+  reach submission.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: refresh can duplicate a message and leak provider detail.
+provider.send(request).await.map_err(|error| error.to_string())?;
+
+// Correct: read-only lookup plus fixed public error mapping.
+provider.find_sent(request, cancellation).await.map_err(map_safe_error)?;
+```
+
 ## Common Mistakes
 
 - Adding a field only to a handwritten frontend interface instead of the Rust DTO.

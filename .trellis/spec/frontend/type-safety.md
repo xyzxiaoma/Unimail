@@ -218,6 +218,82 @@ const detail = await getMailMessageDetail(messageId);
 return <SafeHtmlMessage messageId={messageId} html={detail.htmlBody ?? ""} />;
 ```
 
+## Mandatory Seven-Section Scenario: compose, local drafts, explicit send, and Sent IPC
+
+### 1. Scope / Trigger
+
+Apply to draft CRUD/reply commands, explicit-send results, Sent projections/refresh/retry commands,
+generated compose DTOs, `src/lib/ipc/compose.ts`, and Compose/Drafts/Sent consumers.
+
+### 2. Signature and Flow
+
+```text
+SQLCipher / explicit-send service / provider Sent lookup
+  -> Rust compose DTOs and fixed errors
+  -> Tauri Promise<unknown>
+  -> compose.ts runtime decoders
+  -> ComposePanel / DraftsView / SentView
+```
+
+Commands are `list_drafts`, `get_draft`, `save_draft`, `delete_draft`, `create_reply_draft`,
+`send_draft`, `list_sent_items`, `refresh_sent_items`, `authorize_outbound_retry`, and
+`report_connectivity`.
+
+### 3. Contract
+
+- UUIDs are validated; revisions and timestamps are unsigned decimal strings; recipient counts are
+  u32; enums and nullable fields are allowlisted.
+- `offline_saved` requires a draft and no attempt ID. Other send states require an attempt ID and no
+  draft; only `rejected` carries an allowlisted failure code.
+- Sent rows accept only `accepted_pending`, `reconciled`, or `unknown_locked` semantic combinations.
+  Provider-observed rows require a reconciled message ID; retry authorization is exclusive to the
+  ambiguous state.
+- DTOs may contain the user's local draft/Sent display content but never raw MIME, Message-ID,
+  reconciliation key, provider cursor/thread/original identity, credential, token, or path.
+- While a meaningful composer is open, desktop close requests are intercepted through the
+  `src/lib/ipc/window-lifecycle.ts` facade: prevent native close, flush the latest revision, then
+  destroy the window only after success. Save failure keeps the window open; components still do
+  not import `@tauri-apps/api` directly.
+
+### 4. Validation & Error Matrix
+
+| Condition | Frontend behavior |
+| --- | --- |
+| Invalid UUID, zero/fractional revision, timestamp, u32, address, or enum | Throw `TypeError` |
+| Impossible send/Sent state combination | Throw `TypeError` |
+| Fixed compose error message/retryability drifts | Throw `TypeError` |
+| Unknown command rejection | Show fixed generic Chinese copy; never render payload text |
+| Offline send result | Keep composer/draft and show that no provider submission occurred |
+| Accepted or ambiguous result | Navigate to Sent; pending and risk-locked states remain distinct |
+
+### 5. Good / Base / Bad Cases
+
+- Good: one decoded `accepted_pending` row shows local content as “等待邮箱确认”, then a later
+  decoded `reconciled` row references the provider-observed local message without duplication.
+- Base: an untouched blank composer closes locally and creates no draft.
+- Bad: casting `sendDraft()` to a handwritten type, treating `submitting` as a Sent row, displaying
+  raw rejection text, or unlocking ambiguous resend without the backend guard.
+
+### 6. Tests Required
+
+- Decoder tables cover valid DTOs, malformed UUID/revision/state/error contracts, and every semantic
+  state combination.
+- Component tests cover one-second autosave, blank close, Escape/focus, reply account lock, no Reply
+  All, offline retention, shutdown flush, pending Sent display, manual refresh, and ambiguous retry
+  confirmation. Window-lifecycle tests prove save success destroys and save failure stays open.
+- App tests cover fixed Inbox/Drafts/Sent navigation and the `N` shortcut outside editable/dialog
+  targets. Run format, lint, typecheck, Vitest, build, binding drift, and changed-release-note checks.
+
+### 7. Wrong vs Correct
+
+```ts
+// Wrong: bypasses runtime validation and invents a private state combination.
+const result = (await sendDraft(request)) as ExplicitSendResultV1;
+
+// Correct: decode once, then render only validated semantic states.
+const result = decodeExplicitSendResult(await sendDraft(request));
+```
+
 ## Forbidden Patterns
 
 - `any` at application or IPC boundaries.

@@ -17,7 +17,7 @@ store, React Query, and reusable custom hooks are not established yet.
 | [Component Guidelines](./component-guidelines.md) | Semantic components, accessibility, styling, and Chinese UI copy | Foundation established |
 | [Hook Guidelines](./hook-guidelines.md) | Built-in hook usage and explicitly deferred data-fetching patterns | Foundation established |
 | [State Management](./state-management.md) | Component-local state and IPC-derived state | Foundation established |
-| [Type Safety](./type-safety.md) | Strict TypeScript plus application/storage/provider-aware OAuth IPC scenarios | Gmail and Outlook onboarding established |
+| [Type Safety](./type-safety.md) | Strict TypeScript plus application, storage, onboarding, reader, and compose/send IPC scenarios | Compose/send boundary established |
 | [Quality Guidelines](./quality-guidelines.md) | Formatting, linting, tests, builds, and forbidden patterns | Foundation established |
 
 ## Pre-Development Checklist
