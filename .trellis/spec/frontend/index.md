@@ -4,21 +4,23 @@
 
 ## Current Baseline
 
-The foundation UI is a Simplified Chinese React shell in
-[`src/App.tsx`](../../../src/App.tsx). It uses semantic HTML, local React state, a local
-stylesheet, and a generated-plus-decoded Tauri IPC boundary. Feature modules, a global
-store, React Query, and reusable custom hooks are not established yet.
+The frontend is a Simplified Chinese React desktop UI. [`src/App.tsx`](../../../src/App.tsx)
+owns shell-level navigation, dialogs, connected-account state, and compose routing; feature
+components live under `src/features/`, repeated copy lives under `src/content/`, and every desktop
+call crosses generated bindings plus a runtime decoder in `src/lib/ipc/`. TanStack Query owns
+IPC-backed mailbox projections, while transient form/dialog state remains local React state. No
+general-purpose global store or reusable custom-hook layer is established.
 
 ## Guidelines Index
 
 | Guide | Current scope | Status |
 | --- | --- | --- |
-| [Directory Structure](./directory-structure.md) | Current shell layout and feature-oriented growth direction | Foundation established |
-| [Component Guidelines](./component-guidelines.md) | Semantic components, accessibility, search/attachment actions, styling, and Chinese UI copy | Attachments/search UI established |
-| [Hook Guidelines](./hook-guidelines.md) | Built-in hook usage and explicitly deferred data-fetching patterns | Foundation established |
-| [State Management](./state-management.md) | Component-local state and IPC-derived state | Foundation established |
+| [Directory Structure](./directory-structure.md) | Shell, feature, content, security, and IPC ownership | V1 structure established |
+| [Component Guidelines](./component-guidelines.md) | Dialogs, compose, reader, search/attachment actions, accessibility, and Chinese copy | V1 interaction patterns established |
+| [Hook Guidelines](./hook-guidelines.md) | Built-in hooks plus Query/Virtual lifecycle patterns | V1 data-flow patterns established |
+| [State Management](./state-management.md) | Shell-local state, feature-local state, and IPC-backed Query state | V1 ownership established |
 | [Type Safety](./type-safety.md) | Strict TypeScript plus application, storage, onboarding, reader, compose/send, search, attachment, and privacy-diagnostic IPC scenarios | Security diagnostics boundary established |
-| [Quality Guidelines](./quality-guidelines.md) | Formatting, linting, tests, builds, and forbidden patterns | Foundation established |
+| [Quality Guidelines](./quality-guidelines.md) | Formatting, linting, tests, builds, and forbidden patterns | V1 quality gate established |
 
 ## Pre-Development Checklist
 
@@ -40,7 +42,11 @@ Before changing frontend code:
 
 ## Primary References
 
-- [`src/App.tsx`](../../../src/App.tsx) is the current component and local-state example.
+- [`src/App.tsx`](../../../src/App.tsx) is the shell-level composition and focus-restoration example.
+- [`src/features/inbox/MailWorkspace.tsx`](../../../src/features/inbox/MailWorkspace.tsx) is the
+  Query/Virtual, reader, search, read-state, external-link, and attachment interaction example.
+- [`src/features/compose/ComposePanel.tsx`](../../../src/features/compose/ComposePanel.tsx) is the
+  autosave, revision, offline-review, close-flush, and explicit-send example.
 - [`src/App.css`](../../../src/App.css) defines the local system-font stack and shell styles.
 - [`src/lib/ipc/application-info.ts`](../../../src/lib/ipc/application-info.ts) owns runtime
   decoding of the generated IPC call.

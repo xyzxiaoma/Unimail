@@ -1,18 +1,20 @@
 # State Management
 
-> Keep foundation state local and promote it only when ownership genuinely crosses features.
+> Keep interaction state local, use Query for IPC-backed projections, and promote ownership only
+> when it genuinely crosses features.
 
 ## Established State Categories
 
 | Category | Current example | Owner |
 | --- | --- | --- |
-| Local interaction | `composeOpen` | `App` coordinates opening and closing the panel |
-| Local feedback | `syncMessage` | `App` updates status after the sync placeholder action |
+| Shell navigation | `activeView`, compose/dialog state | `App` coordinates Inbox/Drafts/Sent and overlays |
+| Local feedback | compose, Sent refresh, external-link, attachment status | The owning feature component |
 | IPC-derived metadata | `appInfo` | `App` loads typed `ApplicationInfo` once at startup |
 | IPC-derived storage health | `storageStatus` / status copy | `App` loads decoded `StorageStatus` and never fabricates readiness |
 | Mail server state | Inbox pages, detail, optimistic read | TanStack Query under `MailWorkspace` |
 | Reader session permission | Remote-image approval, link dialog | Current keyed reader/workspace component only |
-| Static display data | `folders`, `iconPaths` | Module constants, not React state |
+| Draft edit concurrency | revision, edit generation, queued save | `ComposePanel` refs plus durable backend revision |
+| Static display data | navigation definitions, `iconPaths`, content modules | Module constants, not React state |
 
 Use `useState` for mutable view state and plain constants for immutable data. Compute
 derived values during render unless a measured cost or external identity requirement
@@ -29,7 +31,7 @@ task. Document ownership and reset behavior before introducing a global store.
 ## IPC and Future Server State
 
 IPC results enter React through typed facades in `src/lib/ipc/`. A rejected command must
-not be replaced with fabricated typed data. The foundation shell may preserve a neutral
+not be replaced with fabricated typed data. The shell may preserve a neutral
 web-preview state, as `App` does when application metadata is unavailable.
 
 Inbox pages/details are cached local-IPC projections; SQLCipher remains the durable source of truth.

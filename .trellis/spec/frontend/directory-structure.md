@@ -7,43 +7,49 @@
 ```text
 src/
 ├── main.tsx                         # React root and StrictMode
-├── App.tsx                          # Foundation three-pane shell and local interactions
-├── App.css                          # Shell styles, CSS variables, system font stack
-├── App.test.tsx                     # User-observable shell tests
+├── App.tsx                          # Shell navigation, dialogs, accounts, and compose routing
+├── App.css                          # Shared desktop layout, tokens, and feature styles
+├── App.test.tsx                     # Shell integration and focus/keyboard tests
+├── content/                         # Repeated Simplified Chinese feature copy
+├── features/
+│   ├── accounts/                    # OAuth and QQ/163 authorization-code dialogs
+│   ├── compose/                     # Composer, Drafts, Sent, and reconciliation UI
+│   ├── inbox/                       # Query-backed Inbox/search/reader/attachment workspace
+│   ├── reader/                      # Sanitized isolated HTML rendering
+│   └── security/                    # Privacy-safe local diagnostics
 └── lib/
-    └── ipc/
-        ├── bindings.ts              # Generated Rust/Tauri types and invoke functions
-        ├── decode.ts                # Shared unknown-object boundary predicate
-        ├── application-info.ts      # Runtime decoder and typed frontend facade
-        ├── application-info.test.ts # Application metadata boundary tests
-        ├── storage-status.ts        # Encrypted-storage status/error decoder and facade
-        └── storage-status.test.ts   # Storage success/error/rejection boundary tests
+    ├── ipc/                         # Generated bindings, runtime decoders, and typed facades
+    └── security/                    # Trusted frontend security helpers
 ```
 
-The current shell intentionally remains in `App.tsx`; do not describe feature folders or
-shared component libraries as existing code.
+Keep cross-feature shell coordination in `App.tsx`; keep feature-specific state and behavior in the
+existing feature directory. There is no generic shared-component directory yet.
 
 ## Ownership
 
 - `main.tsx` only mounts the application and framework-level providers when they become
   necessary.
-- `App.tsx` currently owns the shell composition and its small local interactions.
-- `App.css` owns foundation layout and tokens. Tailwind is configured through Vite, but
-  the present shell mainly uses named stylesheet classes.
+- `App.tsx` owns the active Inbox/Drafts/Sent view, compose lifecycle, account dialogs, security
+  dialog, connectivity reporting, status bar, and focus restoration between overlays and openers.
+- `App.css` owns the current named classes, layout, tokens, responsive behavior, and system font
+  stack. Tailwind is configured but is not the established component styling convention.
+- `src/features/<feature>/` owns user-observable behavior and colocated component tests.
+- `src/content/*.zh-CN.ts` owns repeated or multi-screen Chinese copy; one-off accessible labels may
+  remain next to the component that owns them.
 - `src/lib/ipc/` owns desktop command invocation, generated DTO imports, runtime decoding,
   and boundary tests. Components consume the typed facade, never raw `invoke` payloads.
+- `src/lib/security/` owns narrow trusted helpers that enforce frontend security formats, such as
+  accepted raster data URLs.
 - Tests are colocated with the unit or boundary they exercise and use `.test.ts` or
   `.test.tsx`.
 
-## Feature-Oriented Growth Direction
+## Feature Placement
 
-When real inbox, compose, account, search, or settings behavior is introduced, group each
-feature's components, state, and tests under `src/features/<feature>/`. Move a component
-to `src/components/` only after it is genuinely shared across features. Keep
-provider-neutral helpers under `src/lib/` and IPC boundaries under `src/lib/ipc/`.
-
-This is a direction for future tasks, not evidence that those directories or abstractions
-already exist. Avoid speculative empty folders and barrel files.
+Extend the existing account, compose, inbox, reader, or security directory when the behavior belongs
+there. Search and attachment controls currently belong to `MailWorkspace` because they reuse Inbox
+scope, selection, and reader detail. Create a new feature directory only for a separately navigable
+or independently testable ownership boundary. Move a component to `src/components/` only after it is
+truly shared across features. Avoid speculative empty folders and barrel files.
 
 ## Naming
 

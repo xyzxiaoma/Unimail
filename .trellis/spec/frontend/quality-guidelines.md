@@ -34,8 +34,10 @@ npm run build
 - Add regression tests for keyboard behavior, status/error feedback, and decoder changes.
 - Keep assertions behavioral; avoid snapshots or class-selector tests for the shell.
 
-Current examples are [`src/App.test.tsx`](../../../src/App.test.tsx) and
-[`src/lib/ipc/application-info.test.ts`](../../../src/lib/ipc/application-info.test.ts).
+Current examples include [`src/App.test.tsx`](../../../src/App.test.tsx),
+[`src/features/inbox/MailWorkspace.test.tsx`](../../../src/features/inbox/MailWorkspace.test.tsx),
+[`src/features/compose/ComposePanel.test.tsx`](../../../src/features/compose/ComposePanel.test.tsx),
+and [`src/lib/ipc/mail-reader.test.ts`](../../../src/lib/ipc/mail-reader.test.ts).
 
 ## Forbidden Patterns
 
@@ -46,8 +48,8 @@ Current examples are [`src/App.test.tsx`](../../../src/App.test.tsx) and
 - Tests that select implementation-only class names when a user-observable query exists.
 - Ignored promises, effect listeners without cleanup, or fabricated success data on IPC
   failure.
-- Introducing React Query, a global store, or a custom-hook architecture before a feature
-  defines and tests the need.
+- Introducing another query/cache library, a general-purpose global store, or a custom-hook
+  architecture without a demonstrated ownership and test need.
 
 ## Review Checklist
 

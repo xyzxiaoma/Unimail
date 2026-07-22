@@ -4,9 +4,9 @@
 
 ## Current Pattern
 
-[`src/App.tsx`](../../../src/App.tsx) composes named function components such as
-`Sidebar`, `MessageList`, `ReaderPane`, `ComposePanel`, and `StatusBar`. Props are narrow,
-explicit inline object types when used once:
+[`src/App.tsx`](../../../src/App.tsx) composes shell components and imports feature-owned dialogs,
+composer, mailbox, Drafts, Sent, and security views. Feature files export named function components;
+props are narrow and use an inline type when the contract is short and private:
 
 ```tsx
 function Sidebar({ onCompose }: { onCompose: () => void }) {
@@ -27,16 +27,16 @@ typed values instead of exposing setters broadly.
   use `aria-hidden="true"`.
 - Connect headings and regions with `aria-labelledby`; use `aria-current`, `aria-pressed`,
   `role="dialog"`, and `aria-live` only when their semantics match the interaction.
-- Preserve keyboard operation and visible focus. The compose placeholder supports Escape,
-  returns focus to the compose button, and avoids firing the `N` shortcut in editable
-  controls.
+- Preserve keyboard operation and visible focus. Compose and modal dialogs support Escape, trap or
+  restore focus where required, flush meaningful drafts before close, and prevent global shortcuts
+  from firing in editable controls or while a modal owns interaction.
 - Test by accessible role and name rather than class names or implementation structure.
 
 ## Styling and Assets
 
 - Import local CSS from the owning component entry. Use descriptive class names and CSS
   custom properties for repeated visual tokens.
-- The foundation font stack in [`src/App.css`](../../../src/App.css) uses installed/system
+- The font stack in [`src/App.css`](../../../src/App.css) uses installed/system
   fonts: `PingFang SC`, `Microsoft YaHei`, `Noto Sans CJK SC`, `system-ui`, `sans-serif`.
 - Icons are local inline SVG paths. Do not load remote fonts, icon kits, images, scripts,
   or stylesheets. A desktop shell must remain usable offline and must not leak requests.
@@ -44,10 +44,11 @@ typed values instead of exposing setters broadly.
 
 ## Simplified Chinese Copy
 
-The V1 interface is Simplified Chinese. Current foundation copy is inline in `App.tsx`
-because there is one shell. When copy repeats or spans feature screens, centralize it in a
-single Chinese content module under `src/content/` introduced by that task. No i18n
-library or multilingual contract is established.
+The V1 interface is Simplified Chinese. Repeated or workflow-sized copy lives in typed
+`src/content/*.zh-CN.ts` modules for OAuth, authorization-code onboarding, compose, reader, and
+security diagnostics. Keep one-off shell labels near `App.tsx`; extend an existing content module
+instead of duplicating status/error wording across components. No i18n library or multilingual
+runtime contract is established.
 
 Use user-facing language, not backend terms. Copy or behavior changes must update
 `CHANGELOG.zh-CN.md` under `未发布`.

@@ -16,8 +16,8 @@ workspace = true
 workspace and CI promotes all warnings to errors. `module_name_repetitions` is the one
 documented workspace allowance.
 
-Public values that should not be ignored use `#[must_use]`; public foundation APIs include
-short rustdoc explaining safety or responsibility.
+Public values that should not be ignored use `#[must_use]`; public ports, services, DTOs, and
+security-sensitive helpers include concise rustdoc explaining safety or responsibility.
 
 ## Required Commands
 
@@ -43,8 +43,9 @@ native executable remains alive through the bounded smoke window.
   tests assert the exact capability whitelist and package version.
 - For every IPC DTO change, update Rust contract tests, frontend decoder tests, and the
   generated binding in one change.
-- Storage tests run against the actual bundled SQLCipher build. Provider markers remain
-  compile-ready until their implementation tasks establish real adapter contracts.
+- Storage tests run against the actual bundled SQLCipher build. Provider changes use fictional
+  fixtures, conformance assertions, scripted protocol/HTTP tests, and deterministic cancellation,
+  retry, cursor-reset, and unknown-after-submission coverage.
 - Tauri command logic should remain thin. Pure adapter mapping is covered by unit tests in the
   Tauri library; platform setup, native credential prompts, and command round trips still require
   native build or end-to-end verification.
@@ -70,7 +71,7 @@ the diff, and retain frontend runtime decoding because the transport result rema
 - `serde_json::Value` or map-shaped command responses when a stable DTO exists.
 - Domain, storage, or provider logic in `src-tauri/src/main.rs` or a Tauri command wrapper.
 - Handwritten duplicate TypeScript DTOs for generated Rust contracts.
-- Claims that provider markers provide synchronization or provider support.
+- Treating diagnostic marker functions such as `adapter_family()` as a provider capability test.
 - New dependencies or abstractions without code and tests that use them.
 
 ## Review Checklist

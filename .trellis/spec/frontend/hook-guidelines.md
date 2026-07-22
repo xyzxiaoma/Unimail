@@ -4,13 +4,17 @@
 
 ## Established Usage
 
-The foundation uses React's built-in hooks in [`src/App.tsx`](../../../src/App.tsx):
+The frontend uses React's built-in hooks in the shell and feature components:
 
-- `useState` for compose visibility, application metadata, storage health/status copy, and sync
-  feedback.
-- `useEffect` for IPC startup work and window keyboard listeners, with cleanup.
-- `useId` to connect labels and headings to generated DOM identifiers.
-- `useRef` to return focus after closing the compose panel.
+- `useState` for shell routing, compose/dialog forms, local feedback, selected rows, and temporary
+  permissions such as current-message remote-image approval.
+- `useEffect` for IPC startup, connectivity/window listeners, autosave timers, focus management,
+  polling, observers, and selection-keyed read timers, always with cleanup.
+- `useId` to connect dialog/form labels and headings to generated DOM identifiers.
+- `useRef` for focus restoration, stale async generations, revision-safe autosave queues, and
+  synchronous pagination single-flight guards.
+- `useCallback`/`useMemo` only where stable identity is required by effects, observers, Query, or a
+  measured derived projection.
 
 Effects that await IPC must protect against writing state after unmount. Effects that add
 listeners must remove the same listener in their cleanup.
@@ -35,7 +39,7 @@ The production implementation also handles rejection so web preview remains usab
 
 ## Custom Hooks
 
-No reusable custom hook pattern exists yet. Do not create a hook merely to move code out
+No reusable custom hook layer exists yet. Do not create a hook merely to move code out
 of a component. Introduce a `use...` hook when stateful behavior is reused, has an
 independent lifecycle worth testing, or makes a feature boundary clearer. Keep its test
 beside the hook.
