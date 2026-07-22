@@ -1,1 +1,13 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Provider-neutral streamed attachment boundary, limits, cancellation, safe errors, and contract-test requirements."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLCipher migrations, repository ownership, FTS maintenance, cleanup recovery, and transactional invariants."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed safe error mapping across repository, application, provider, and Tauri layers."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Privacy-safe logging rules for attachment operations, filesystem paths, queries, and provider failures."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Rust test, lint, migration, and cross-platform quality expectations."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Accessible three-pane component behavior, reader actions, and user-visible state requirements."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"React Query ownership, stale request handling, query keys, and mutation/invalidation conventions."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Generated and runtime-validated IPC DTO requirements."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend test, lint, type-check, and behavior coverage expectations."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"End-to-end data flow and boundary review for attachment IDs, operations, search cursors, and errors."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the shared provider, repository, reader-row, paging, and decoder patterns."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/provider-integration.md","reason":"Original attachment streaming, size, provider locator, and collision-safe destination research."}
+{"file":".trellis/tasks/07-19-implement-unimail-v1/research/core-architecture.md","reason":"Original local-first architecture, IPC, SQLCipher, and cross-platform desktop boundaries."}

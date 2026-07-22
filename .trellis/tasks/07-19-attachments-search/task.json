@@ -3,7 +3,7 @@
   "name": "attachments-search",
   "title": "Attachments and Search",
   "description": "Implement safe attachment download/cache behavior and offline SQLite FTS5 search UI.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

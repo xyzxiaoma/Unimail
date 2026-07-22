@@ -1,1 +1,11 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/provider-guidelines.md","reason":"Verify all provider implementations retain the streaming and cancellation contract."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify migration preservation, FTS transactionality, paging, and cleanup safety."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify every failure becomes a stable safe code without internal detail leakage."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify paths, query text, message content, credentials, and attachment bytes never reach logs."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify strict Rust formatting, lint, tests, and migration coverage."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify accessible attachment controls and coherent inbox/search/reader behavior."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify stale search requests, operation status, pagination, and selection state are correct."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify generated bindings and runtime decoders reject malformed payloads."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify frontend lint, type-check, tests, and user-visible state coverage."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace attachment and search data across UI, IPC, application, repository, and provider layers."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated provider/download/search/paging logic and inconsistent DTO mapping."}
