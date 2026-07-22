@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { isSafeRasterDataUrl } from "../../lib/security/raster-data-url";
 
 const allowedTags = [
   "a",
@@ -122,7 +123,7 @@ export function sanitizeMailHtml(
       remoteImages.push({ alt, url: normalized });
     }
     const approvedSource = normalized ? approvedImageSources.get(normalized) : undefined;
-    if (approvedSource) {
+    if (isSafeRasterDataUrl(approvedSource)) {
       image.setAttribute("src", approvedSource);
       continue;
     }

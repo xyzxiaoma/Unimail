@@ -1,5 +1,4 @@
 use std::{
-    fs,
     fs::{File, OpenOptions},
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
@@ -16,6 +15,9 @@ use crate::{
     StorageError,
     credentials::{DATABASE_KEY_BYTES, DATABASE_KEY_REF},
     migration::{SCHEMA_VERSION, migrations},
+    permissions::{
+        configure_private_file_creation, ensure_private_directory, ensure_private_file_if_present,
+    },
 };
 
 static INITIALIZATION_LOCK: Mutex<()> = Mutex::new(());
@@ -69,6 +71,7 @@ impl ConnectionFactory {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let _profile_lock = self.acquire_profile_lock()?;
+        self.ensure_profile_permissions()?;
         let key = self.load_or_create_key()?;
         let database_exists = self
             .path
@@ -86,6 +89,7 @@ impl ConnectionFactory {
         if schema_version != SCHEMA_VERSION {
             return Err(StorageError::Migration);
         }
+        self.ensure_profile_permissions()?;
         let capabilities = StorageCapabilities {
             schema_version,
             cipher_version,
@@ -97,14 +101,14 @@ impl ConnectionFactory {
 
     fn acquire_profile_lock(&self) -> Result<File, StorageError> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|_| StorageError::DatabaseOpen)?;
+            ensure_private_directory(parent).map_err(|_| StorageError::DatabaseOpen)?;
         }
         let lock_path = self.path.with_extension("init.lock");
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
+        ensure_private_file_if_present(&lock_path).map_err(|_| StorageError::DatabaseOpen)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).read(true).write(true);
+        configure_private_file_creation(&mut options);
+        let file = options
             .open(lock_path)
             .map_err(|_| StorageError::DatabaseOpen)?;
         file.lock_exclusive()
@@ -145,14 +149,16 @@ impl ConnectionFactory {
         database_exists: bool,
     ) -> Result<(Connection, String), StorageError> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|_| StorageError::DatabaseOpen)?;
+            ensure_private_directory(parent).map_err(|_| StorageError::DatabaseOpen)?;
         }
+        ensure_private_file_if_present(&self.path).map_err(|_| StorageError::DatabaseOpen)?;
 
         let connection = Connection::open_with_flags(
             &self.path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )
         .map_err(|_| StorageError::DatabaseOpen)?;
+        ensure_private_file_if_present(&self.path).map_err(|_| StorageError::DatabaseOpen)?;
 
         // SQLCipher requires keying before any read from sqlite_master or user_version.
         let encoded = Zeroizing::new(hex::encode(key.expose_secret()));
@@ -169,6 +175,27 @@ impl ConnectionFactory {
 
         Ok((connection, cipher_version))
     }
+
+    fn ensure_profile_permissions(&self) -> Result<(), StorageError> {
+        if let Some(parent) = self.path.parent() {
+            ensure_private_directory(parent).map_err(|_| StorageError::DatabaseOpen)?;
+        }
+        for path in [
+            self.path.clone(),
+            sidecar_path(&self.path, "-wal"),
+            sidecar_path(&self.path, "-shm"),
+            self.path.with_extension("init.lock"),
+        ] {
+            ensure_private_file_if_present(&path).map_err(|_| StorageError::DatabaseOpen)?;
+        }
+        Ok(())
+    }
+}
+
+fn sidecar_path(path: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 fn configure_connection(connection: &Connection) -> Result<(), StorageError> {
@@ -308,10 +335,15 @@ impl EncryptedStore {
 mod tests {
     use std::sync::{Arc, Barrier};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
     use rusqlite::Connection;
     use secrecy::{ExposeSecret, SecretBox};
     use tempfile::TempDir;
 
+    #[cfg(unix)]
+    use super::sidecar_path;
     use super::{ConnectionFactory, EncryptedStore, classify_schema_read_error};
     use crate::{FakeCredentialStore, StorageError, credentials::DATABASE_KEY_REF};
     use unimail_core::{CredentialRef, CredentialStore};
@@ -320,6 +352,73 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary profile");
         let path = directory.path().join("unimail.db");
         (directory, path, FakeCredentialStore::new())
+    }
+
+    #[cfg(unix)]
+    fn permission_mode(path: &std::path::Path) -> u32 {
+        std::fs::symlink_metadata(path)
+            .expect("sensitive path metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_profile_storage_permissions_are_enforced_end_to_end() {
+        let directory = tempfile::tempdir().expect("temporary profile root");
+        let profile_directory = directory.path().join("profile");
+        std::fs::create_dir(&profile_directory).expect("profile directory");
+        std::fs::set_permissions(&profile_directory, std::fs::Permissions::from_mode(0o777))
+            .expect("widen profile directory");
+
+        let path = profile_directory.join("unimail.db");
+        let wal_path = sidecar_path(&path, "-wal");
+        let shm_path = sidecar_path(&path, "-shm");
+        let lock_path = path.with_extension("init.lock");
+        let credentials = FakeCredentialStore::new();
+        let factory = ConnectionFactory::fake(&path, credentials);
+        let store = EncryptedStore::initialize(&factory).expect("initialize encrypted database");
+
+        assert_eq!(permission_mode(&profile_directory), 0o700);
+        for artifact in [&path, &wal_path, &shm_path, &lock_path] {
+            assert!(
+                artifact.is_file(),
+                "expected {} to exist",
+                artifact.display()
+            );
+            assert_eq!(permission_mode(artifact), 0o600, "{}", artifact.display());
+            std::fs::set_permissions(artifact, std::fs::Permissions::from_mode(0o666))
+                .expect("widen sensitive file");
+        }
+        std::fs::set_permissions(&profile_directory, std::fs::Permissions::from_mode(0o777))
+            .expect("widen profile directory again");
+
+        factory
+            .ensure_profile_permissions()
+            .expect("correct existing profile permissions");
+        assert_eq!(permission_mode(&profile_directory), 0o700);
+        for artifact in [&path, &wal_path, &shm_path, &lock_path] {
+            assert_eq!(permission_mode(artifact), 0o600, "{}", artifact.display());
+        }
+        drop(store);
+
+        let symlink_directory = tempfile::tempdir().expect("temporary symlink profile");
+        let symlink_path = symlink_directory.path().join("unimail.db");
+        let target = symlink_directory.path().join("unrelated-sidecar");
+        std::fs::write(&target, b"unrelated").expect("unrelated sidecar target");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("set unrelated target permissions");
+        symlink(&target, sidecar_path(&symlink_path, "-wal")).expect("sidecar symlink");
+
+        assert!(matches!(
+            EncryptedStore::initialize(&ConnectionFactory::fake(
+                symlink_path,
+                FakeCredentialStore::new(),
+            )),
+            Err(StorageError::DatabaseOpen)
+        ));
+        assert_eq!(permission_mode(&target), 0o644);
     }
 
     #[test]

@@ -32,7 +32,10 @@ use unimail_core::{
     TransitionDesiredReadMutationInput, TransitionSyncOperationInput,
 };
 
-use crate::{ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError};
+use crate::{
+    ConnectionFactory, EncryptedStore, NativeCredentialStore, StorageError,
+    permissions::{configure_private_file_creation, ensure_private_directory},
+};
 
 const SEARCH_DOCUMENT_VERSION: u32 = 1;
 const MAX_SEARCH_TERMS: usize = 48;
@@ -100,7 +103,7 @@ impl SqlCipherRepository {
             || PathBuf::from("attachments"),
             |parent| parent.join("attachments"),
         );
-        fs::create_dir_all(&attachment_cache_root)
+        ensure_private_directory(&attachment_cache_root)
             .map_err(|_| RepositoryError::DatabaseOpenFailed)?;
         let cache_metadata = fs::symlink_metadata(&attachment_cache_root)
             .map_err(|_| RepositoryError::DatabaseOpenFailed)?;
@@ -215,9 +218,10 @@ impl SqlCipherRepository {
             return Err(RepositoryError::ConstraintViolation);
         }
         let temporary_path = parent.join(format!("{ATTACHMENT_PARTIAL_PREFIX}{operation_id}"));
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        configure_private_file_creation(&mut options);
+        let file = options
             .open(&temporary_path)
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::AlreadyExists => RepositoryError::ConstraintViolation,
@@ -4856,6 +4860,9 @@ fn map_storage_error(error: StorageError) -> RepositoryError {
 mod tests {
     use std::{io::Write, str::FromStr, sync::Arc};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
     use secrecy::SecretBox;
     use tempfile::TempDir;
     use unimail_core::{
@@ -4934,6 +4941,59 @@ mod tests {
             account_id,
             mailbox_id,
         }
+    }
+
+    #[cfg(unix)]
+    fn permission_mode(path: &std::path::Path) -> u32 {
+        std::fs::symlink_metadata(path)
+            .expect("sensitive path metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_attachment_storage_permissions_are_enforced_end_to_end() {
+        let fixture = fixture();
+        let attachment_cache = fixture.directory.path().join("attachments");
+        assert_eq!(permission_mode(&attachment_cache), 0o700);
+
+        let destination = fixture.directory.path().join("private-attachment.bin");
+        let mut transfer = fixture
+            .repository
+            .begin_attachment_transfer(OperationId::new(), &destination, 1)
+            .expect("begin private attachment transfer");
+        assert_eq!(permission_mode(&transfer.temporary_path), 0o600);
+        let mut file = transfer.take_file().expect("take private transfer file");
+        file.write_all(b"private attachment")
+            .expect("write private attachment");
+        file.sync_all().expect("sync private attachment");
+        drop(file);
+        fixture
+            .repository
+            .finish_attachment_transfer(&transfer)
+            .expect("finish private attachment transfer");
+        assert_eq!(permission_mode(&destination), 0o600);
+
+        let symlink_directory = tempfile::tempdir().expect("temporary symlink profile");
+        let profile_directory = symlink_directory.path().join("profile");
+        let unrelated_cache = symlink_directory.path().join("unrelated-cache");
+        std::fs::create_dir(&profile_directory).expect("profile directory");
+        std::fs::create_dir(&unrelated_cache).expect("unrelated cache directory");
+        std::fs::set_permissions(&unrelated_cache, std::fs::Permissions::from_mode(0o755))
+            .expect("set unrelated cache permissions");
+        symlink(&unrelated_cache, profile_directory.join("attachments"))
+            .expect("attachment cache symlink");
+
+        assert!(matches!(
+            SqlCipherRepository::initialize(
+                profile_directory.join("unimail.db"),
+                Arc::new(FakeCredentialStore::new()) as Arc<dyn CredentialStore>,
+            ),
+            Err(RepositoryError::DatabaseOpenFailed)
+        ));
+        assert_eq!(permission_mode(&unrelated_cache), 0o755);
     }
 
     #[test]

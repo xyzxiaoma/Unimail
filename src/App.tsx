@@ -5,6 +5,8 @@ import { AuthorizationCodeOnboardingDialog } from "./features/accounts/Authoriza
 import { ComposePanel } from "./features/compose/ComposePanel";
 import { DraftsView } from "./features/compose/DraftsView";
 import { SentView } from "./features/compose/SentView";
+import { SecurityDiagnosticsDialog } from "./features/security/SecurityDiagnosticsDialog";
+import { securityDiagnosticsContent } from "./content/security-diagnostics.zh-CN";
 import type { AuthorizationCodeProvider } from "./lib/ipc/authorization-code-onboarding";
 import { MailWorkspace } from "./features/inbox/MailWorkspace";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
@@ -124,12 +126,14 @@ function Sidebar({
   activeView,
   onAddAccount,
   onCompose,
+  onDiagnostics,
   onViewChange,
 }: {
   accounts: ConnectedAccountSummary[];
   activeView: MailView;
   onAddAccount: (account: ConnectedAccountSummary | null, opener: HTMLButtonElement) => void;
   onCompose: () => void;
+  onDiagnostics: (opener: HTMLButtonElement) => void;
   onViewChange: (view: MailView) => void;
 }) {
   return (
@@ -213,9 +217,13 @@ function Sidebar({
           {accounts.length > 0 ? "添加另一个账户" : "开始设置"}
         </button>
       </section>
-      <button className="settings-button" type="button">
+      <button
+        className="settings-button"
+        type="button"
+        onClick={(event) => onDiagnostics(event.currentTarget)}
+      >
         <Icon name="settings" />
-        设置
+        {securityDiagnosticsContent.action}
       </button>
     </aside>
   );
@@ -265,8 +273,10 @@ export default function App() {
   const [authorizationCodeProvider, setAuthorizationCodeProvider] =
     useState<AuthorizationCodeProvider | null>(null);
   const [reconnectAccount, setReconnectAccount] = useState<ConnectedAccountSummary | null>(null);
+  const [securityDialogOpen, setSecurityDialogOpen] = useState(false);
   const composeButtonRef = useRef<HTMLDivElement>(null);
   const oauthDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const securityDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -355,7 +365,7 @@ export default function App() {
 
   useEffect(() => {
     const openCompose = (event: KeyboardEvent) => {
-      if (oauthDialogOpen) return;
+      if (oauthDialogOpen || securityDialogOpen) return;
       if (event.key.toLowerCase() === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) {
         const target = event.target;
         if (
@@ -371,7 +381,7 @@ export default function App() {
     };
     window.addEventListener("keydown", openCompose);
     return () => window.removeEventListener("keydown", openCompose);
-  }, [oauthDialogOpen]);
+  }, [oauthDialogOpen, securityDialogOpen]);
 
   const closeCompose = () => {
     setComposeOpen(false);
@@ -436,6 +446,16 @@ export default function App() {
     setSyncMessage(`${name} 已连接，正在准备同步收件箱`);
   }, []);
 
+  const openSecurityDialog = useCallback((opener: HTMLButtonElement) => {
+    securityDialogOpenerRef.current = opener;
+    setSecurityDialogOpen(true);
+  }, []);
+
+  const closeSecurityDialog = useCallback(() => {
+    setSecurityDialogOpen(false);
+    window.setTimeout(() => securityDialogOpenerRef.current?.focus(), 0);
+  }, []);
+
   return (
     <div className="app-frame">
       <div className="app-content" ref={composeButtonRef}>
@@ -444,6 +464,7 @@ export default function App() {
           activeView={activeView}
           onAddAccount={openOAuthDialog}
           onCompose={openNewCompose}
+          onDiagnostics={openSecurityDialog}
           onViewChange={setActiveView}
         />
         {activeView === "inbox" ? (
@@ -488,6 +509,7 @@ export default function App() {
             onConnected={recordConnectedAccount}
           />
         )}
+        {securityDialogOpen && <SecurityDiagnosticsDialog onClose={closeSecurityDialog} />}
       </div>
       <StatusBar
         appInfo={appInfo}

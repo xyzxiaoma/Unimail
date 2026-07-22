@@ -7,6 +7,7 @@ mod credentials;
 mod database;
 mod error;
 mod migration;
+mod permissions;
 mod repository;
 
 pub use credentials::{FakeCredentialStore, NativeCredentialStore};

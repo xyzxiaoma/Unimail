@@ -12,6 +12,12 @@ export type StorageStatus = { ready: boolean, schemaVersion: number, cipherAvail
 
 export type StorageCommandError = { code: StorageErrorCode, message: string, retryable: boolean, };
 
+export type SecurityStorageDiagnosticsV1 = { ready: boolean, schemaVersion: number | null, cipherAvailable: boolean, fts5Available: boolean, credentialStore: CredentialStoreKind, safeErrorCode: StorageErrorCode | null, };
+
+export type ProviderSecurityDiagnosticsV1 = { provider: Provider, configured: boolean, accountCount: number | null, connectedCount: number | null, reconnectCount: number | null, };
+
+export type SecurityDiagnosticsV1 = { appVersion: string, platform: string, online: boolean, storage: SecurityStorageDiagnosticsV1, providers: Array<ProviderSecurityDiagnosticsV1>, };
+
 export type Provider = "gmail" | "outlook" | "qq" | "netease";
 
 export type AccountAuthState = "connected" | "needs_authentication" | "unavailable";
@@ -94,6 +100,10 @@ export function applicationInfo(): Promise<unknown> {
 
 export function storageStatus(): Promise<unknown> {
   return invoke("storage_status");
+}
+
+export function securityDiagnostics(): Promise<unknown> {
+  return invoke("security_diagnostics");
 }
 
 export function oauthOnboardingStatus(provider: Provider): Promise<unknown> {

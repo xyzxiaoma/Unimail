@@ -25,6 +25,7 @@ import {
   type SearchPageV1,
 } from "./bindings";
 import { isNullableString, isRecord, isUint32, isUnsignedIntegerString, isUuid } from "./decode";
+import { isRasterImageMediaType, isSafeRasterDataUrl } from "../security/raster-data-url";
 
 export type {
   AssignReadStateResultV1,
@@ -41,9 +42,6 @@ export type {
 
 const addressRoles = new Set<AddressRole>(["from", "sender", "to", "cc", "bcc", "reply_to"]);
 const messageDirections = new Set<MessageDirection>(["incoming", "outgoing"]);
-const remoteImageDataUrlPattern = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/u;
-const remoteImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const maxRemoteImageDataUrlLength = 2_800_000;
 const attachmentStates = new Set<AttachmentDownloadStateV1>([
   "downloading",
   "completed",
@@ -290,14 +288,7 @@ export function decodeRemoteImageResult(value: unknown): RemoteImageResultV1 {
     throw new TypeError("远程图片返回必须为对象");
   }
   const { mediaType, dataUrl } = value;
-  if (
-    typeof mediaType !== "string" ||
-    !remoteImageMediaTypes.has(mediaType) ||
-    typeof dataUrl !== "string" ||
-    dataUrl.length > maxRemoteImageDataUrlLength ||
-    !remoteImageDataUrlPattern.test(dataUrl) ||
-    !dataUrl.startsWith(`data:${mediaType};base64,`)
-  ) {
+  if (!isRasterImageMediaType(mediaType) || !isSafeRasterDataUrl(dataUrl, mediaType)) {
     throw new TypeError("远程图片返回了无效数据");
   }
   return { mediaType, dataUrl };

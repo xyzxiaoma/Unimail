@@ -10,6 +10,7 @@ mod onboarding;
 mod provider;
 mod reader;
 mod search;
+mod security;
 mod storage;
 
 use serde::Serialize;
@@ -78,6 +79,9 @@ pub use search::{
     SearchMessageCursor, SearchMessageHit, SearchMessageHitV1, SearchMessagePage,
     SearchMessagesInput, SearchPageRequestV1, SearchPageV1, decode_search_cursor,
     encode_search_cursor, search_scope_hash,
+};
+pub use security::{
+    ProviderSecurityDiagnosticsV1, SecurityDiagnosticsV1, SecurityStorageDiagnosticsV1,
 };
 pub use storage::{
     CredentialStore, CredentialStoreError, CredentialStoreKind, RepositoryError, RepositoryResult,

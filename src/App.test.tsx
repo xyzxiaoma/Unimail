@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { getConnectedAccounts, getOAuthOnboardingStatus } from "./lib/ipc/oauth-onboarding";
+import { getSecurityDiagnostics } from "./lib/ipc/security-diagnostics";
 import { decodeStorageCommandError, getStorageStatus } from "./lib/ipc/storage-status";
 
 vi.mock("./lib/ipc/application-info", () => ({
@@ -12,6 +13,10 @@ vi.mock("./lib/ipc/application-info", () => ({
 vi.mock("./lib/ipc/storage-status", () => ({
   decodeStorageCommandError: vi.fn(),
   getStorageStatus: vi.fn(),
+}));
+
+vi.mock("./lib/ipc/security-diagnostics", () => ({
+  getSecurityDiagnostics: vi.fn(),
 }));
 
 vi.mock("./lib/ipc/oauth-onboarding", () => ({
@@ -50,6 +55,7 @@ const mockedDecodeStorageCommandError = vi.mocked(decodeStorageCommandError);
 const mockedGetStorageStatus = vi.mocked(getStorageStatus);
 const mockedGetConnectedAccounts = vi.mocked(getConnectedAccounts);
 const mockedGetOAuthOnboardingStatus = vi.mocked(getOAuthOnboardingStatus);
+const mockedGetSecurityDiagnostics = vi.mocked(getSecurityDiagnostics);
 
 function renderApp() {
   const queryClient = new QueryClient({
@@ -83,6 +89,50 @@ describe("Unimail 基础界面", () => {
         error: null,
       }),
     );
+    mockedGetSecurityDiagnostics.mockReset();
+    mockedGetSecurityDiagnostics.mockResolvedValue({
+      appVersion: "0.1.0",
+      platform: "windows",
+      online: true,
+      storage: {
+        ready: true,
+        schemaVersion: 4,
+        cipherAvailable: true,
+        fts5Available: true,
+        credentialStore: "windows",
+        safeErrorCode: null,
+      },
+      providers: [
+        {
+          provider: "gmail",
+          configured: true,
+          accountCount: 0,
+          connectedCount: 0,
+          reconnectCount: 0,
+        },
+        {
+          provider: "outlook",
+          configured: false,
+          accountCount: 0,
+          connectedCount: 0,
+          reconnectCount: 0,
+        },
+        {
+          provider: "qq",
+          configured: true,
+          accountCount: 0,
+          connectedCount: 0,
+          reconnectCount: 0,
+        },
+        {
+          provider: "netease",
+          configured: true,
+          accountCount: 0,
+          connectedCount: 0,
+          reconnectCount: 0,
+        },
+      ],
+    });
   });
 
   afterEach(() => {
@@ -130,6 +180,30 @@ describe("Unimail 基础界面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "同步邮件" }));
     expect(screen.getByText("尚无可同步账户")).toBeTruthy();
+  });
+
+  it("安全与诊断入口打开本地只读信息并在关闭后恢复焦点", async () => {
+    renderApp();
+    const opener = screen.getByRole("button", { name: "安全与诊断" });
+
+    fireEvent.click(opener);
+    expect(await screen.findByRole("dialog", { name: "安全与诊断" })).toBeTruthy();
+    expect(await screen.findByLabelText("可选择的诊断文本")).toHaveTextContent(
+      "本地加密存储：已就绪",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "安全与诊断" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it("安全与诊断弹窗打开时不会响应写邮件快捷键", async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "安全与诊断" }));
+    expect(await screen.findByRole("dialog", { name: "安全与诊断" })).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "n" });
+    expect(screen.queryByRole("dialog", { name: "撰写邮件" })).toBeNull();
   });
 
   it("授权失效的 Gmail 账户保留重新连接入口", async () => {

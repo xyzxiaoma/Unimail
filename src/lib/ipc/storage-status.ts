@@ -41,11 +41,11 @@ const storageErrorCodes = new Set<StorageErrorCode>(
   Object.keys(storageErrorContracts) as StorageErrorCode[],
 );
 
-function isCredentialStoreKind(value: unknown): value is CredentialStoreKind {
+export function isCredentialStoreKind(value: unknown): value is CredentialStoreKind {
   return typeof value === "string" && credentialStoreKinds.has(value as CredentialStoreKind);
 }
 
-function isStorageErrorCode(value: unknown): value is StorageErrorCode {
+export function isStorageErrorCode(value: unknown): value is StorageErrorCode {
   return typeof value === "string" && storageErrorCodes.has(value as StorageErrorCode);
 }
 

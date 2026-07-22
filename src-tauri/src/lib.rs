@@ -16,17 +16,18 @@ use unimail_application::{
     SyncProvider, SyncStore,
 };
 use unimail_core::{
-    AccountAuthState, AccountId, ApplicationInfo, AssignReadStateResultV1,
+    Account, AccountAuthState, AccountId, ApplicationInfo, AssignReadStateResultV1,
     AttachmentDownloadCommandError, AttachmentDownloadErrorCode, AttachmentDownloadSnapshotV1,
     AttachmentId, AuthorizeOutboundRetryInput, ComposeCommandError, ComposeCommandErrorCode,
-    ConnectedAccountSummary, CredentialStore, DraftId, DraftSaveInput, DraftSummaryV1, DraftV1,
-    ExplicitSendRequestV1, ExplicitSendResultV1, ExplicitSendStateV1, InboxPageRequestV1,
-    InboxPageV1, MessageDetailV1, MessageId, MessageReadStateInput, OAuthOnboardingCommandError,
-    OAuthOnboardingErrorCode, OAuthOnboardingStatus, OperationId, OutboundAttemptId, Provider,
-    ProviderErrorKind, RemoteImageResultV1, RepositoryError, RepositoryResult,
-    RetryAuthorizationResultV1, SaveDraftRequestV1, SearchPageRequestV1, SearchPageV1, SentItemV1,
-    SentRefreshResultV1, StorageCommandError, StorageErrorCode, StorageRepository, StorageStatus,
-    SyncState,
+    ConnectedAccountSummary, CredentialStore, CredentialStoreKind, DraftId, DraftSaveInput,
+    DraftSummaryV1, DraftV1, ExplicitSendRequestV1, ExplicitSendResultV1, ExplicitSendStateV1,
+    InboxPageRequestV1, InboxPageV1, MessageDetailV1, MessageId, MessageReadStateInput,
+    OAuthOnboardingCommandError, OAuthOnboardingErrorCode, OAuthOnboardingStatus, OperationId,
+    OutboundAttemptId, Provider, ProviderErrorKind, ProviderSecurityDiagnosticsV1,
+    RemoteImageResultV1, RepositoryError, RepositoryResult, RetryAuthorizationResultV1,
+    SaveDraftRequestV1, SearchPageRequestV1, SearchPageV1, SecurityDiagnosticsV1,
+    SecurityStorageDiagnosticsV1, SentItemV1, SentRefreshResultV1, StorageCommandError,
+    StorageErrorCode, StorageRepository, StorageStatus, SyncState,
 };
 use unimail_providers::{
     SharedMimeCodec,
@@ -53,10 +54,12 @@ const DATABASE_FILE_NAME: &str = "unimail.db";
 
 struct StorageState {
     repository: Result<Arc<SqlCipherRepository>, RepositoryError>,
+    credential_store: CredentialStoreKind,
 }
 
 impl StorageState {
     fn initialize(app: &tauri::App, credentials: Arc<dyn CredentialStore>) -> Self {
+        let credential_store = credentials.kind();
         let repository = app
             .path()
             .app_data_dir()
@@ -73,7 +76,10 @@ impl StorageState {
             })
             .map(Arc::new);
 
-        Self { repository }
+        Self {
+            repository,
+            credential_store,
+        }
     }
 
     fn status(&self) -> Result<StorageStatus, StorageCommandError> {
@@ -91,6 +97,108 @@ impl StorageState {
             .map(Arc::clone)
             .map_err(|error| StorageCommandError::from(*error))
     }
+
+    fn security_diagnostics(&self) -> (SecurityStorageDiagnosticsV1, Option<Vec<Account>>) {
+        let repository = match &self.repository {
+            Ok(repository) => repository,
+            Err(error) => {
+                return (
+                    unavailable_storage_diagnostics(self.credential_store, error.code()),
+                    None,
+                );
+            }
+        };
+        let status = match repository.health() {
+            Ok(status) => status,
+            Err(error) => {
+                return (
+                    unavailable_storage_diagnostics(self.credential_store, error.code()),
+                    None,
+                );
+            }
+        };
+        let accounts = repository.list_accounts().ok();
+        (
+            SecurityStorageDiagnosticsV1 {
+                ready: status.ready,
+                schema_version: Some(status.schema_version),
+                cipher_available: status.cipher_available,
+                fts5_available: status.fts5_available,
+                credential_store: status.credential_store,
+                safe_error_code: None,
+            },
+            accounts,
+        )
+    }
+}
+
+fn unavailable_storage_diagnostics(
+    credential_store: CredentialStoreKind,
+    code: StorageErrorCode,
+) -> SecurityStorageDiagnosticsV1 {
+    SecurityStorageDiagnosticsV1 {
+        ready: false,
+        schema_version: None,
+        cipher_available: false,
+        fts5_available: false,
+        credential_store,
+        safe_error_code: Some(code),
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ProviderAccountCounts {
+    total: u32,
+    connected: u32,
+    reconnect: u32,
+}
+
+impl ProviderAccountCounts {
+    fn include(&mut self, account: &Account) -> Option<()> {
+        if account.deleting {
+            return Some(());
+        }
+        self.total = self.total.checked_add(1)?;
+        if account.enabled && account.auth_state == AccountAuthState::Connected {
+            self.connected = self.connected.checked_add(1)?;
+        }
+        if account.enabled && account.auth_state == AccountAuthState::NeedsAuthentication {
+            self.reconnect = self.reconnect.checked_add(1)?;
+        }
+        Some(())
+    }
+}
+
+fn provider_security_diagnostics(
+    accounts: Option<&[Account]>,
+) -> Vec<ProviderSecurityDiagnosticsV1> {
+    let provider_configs = [
+        (Provider::Gmail, gmail_config().is_configured()),
+        (Provider::Outlook, outlook_config().is_configured()),
+        (Provider::Qq, true),
+        (Provider::Netease, true),
+    ];
+    provider_configs
+        .into_iter()
+        .map(|(provider, configured)| {
+            let counts = accounts.and_then(|accounts| {
+                accounts
+                    .iter()
+                    .filter(|account| account.provider == provider)
+                    .try_fold(ProviderAccountCounts::default(), |mut counts, account| {
+                        counts.include(account)?;
+                        Some(counts)
+                    })
+            });
+            ProviderSecurityDiagnosticsV1 {
+                provider,
+                configured,
+                account_count: counts.map(|counts| counts.total),
+                connected_count: counts.map(|counts| counts.connected),
+                reconnect_count: counts.map(|counts| counts.reconnect),
+            }
+        })
+        .collect()
 }
 
 struct OAuthState {
@@ -872,6 +980,22 @@ fn storage_status(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri command state is a framework-owned extractor.
+fn security_diagnostics(
+    storage: tauri::State<'_, StorageState>,
+    connectivity: tauri::State<'_, DesktopConnectivity>,
+) -> SecurityDiagnosticsV1 {
+    let (storage, accounts) = storage.security_diagnostics();
+    SecurityDiagnosticsV1 {
+        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        platform: std::env::consts::OS.to_owned(),
+        online: connectivity.current() != unimail_application::ConnectivityState::Offline,
+        providers: provider_security_diagnostics(accounts.as_deref()),
+        storage,
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command state is a framework-owned extractor.
 fn oauth_onboarding_status(
     provider: Provider,
     state: tauri::State<'_, OAuthState>,
@@ -1495,6 +1619,22 @@ fn open_confirmed_external_url(url: String) -> Result<(), StorageCommandError> {
         .map_err(|_| StorageCommandError::from_code(StorageErrorCode::Internal))
 }
 
+fn main_window_navigation_allowed(url: &url::Url, development: bool) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let bundled = matches!(
+        (url.scheme(), url.host_str(), url.port()),
+        ("tauri", Some("localhost"), None) | ("http" | "https", Some("tauri.localhost"), None)
+    );
+    bundled
+        || (development
+            && matches!(
+                (url.scheme(), url.host_str(), url.port()),
+                ("http", Some("localhost"), Some(1420))
+            ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Starts the Tauri desktop process and installs the approved IPC commands.
 ///
@@ -1516,11 +1656,24 @@ pub fn run() {
             app.manage(authorization_code);
             app.manage(connectivity);
             app.manage(Arc::new(AttachmentOperationState::default()));
+            let main_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == "main")
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("missing main window configuration"))?;
+            tauri::WebviewWindowBuilder::from_config(app, &main_config)?
+                .on_navigation(|url| main_window_navigation_allowed(url, cfg!(debug_assertions)))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             application_info,
             storage_status,
+            security_diagnostics,
             oauth_onboarding_status,
             start_oauth_onboarding,
             cancel_oauth_onboarding,
@@ -1552,9 +1705,63 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use unimail_core::{CredentialStoreKind, RepositoryError, StorageErrorCode, StorageStatus};
+    use unimail_core::{
+        Account, AccountAuthState, AccountId, CredentialRef, CredentialStoreKind, Provider,
+        RepositoryError, StorageErrorCode, StorageStatus,
+    };
 
-    use super::{map_storage_status, validate_external_url};
+    use super::{
+        ProviderAccountCounts, main_window_navigation_allowed, map_storage_status,
+        provider_security_diagnostics, unavailable_storage_diagnostics, validate_external_url,
+    };
+
+    fn account(
+        provider: Provider,
+        auth_state: AccountAuthState,
+        enabled: bool,
+        deleting: bool,
+    ) -> Account {
+        Account {
+            id: AccountId::new(),
+            provider,
+            email: "private@example.test".to_owned(),
+            display_name: Some("Private Person".to_owned()),
+            credential_ref: CredentialRef::new("private-reference"),
+            auth_state,
+            enabled,
+            deleting,
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            last_error_code: Some("private-error".to_owned()),
+        }
+    }
+
+    #[test]
+    fn main_window_navigation_is_origin_bound_and_new_urls_are_rejected() {
+        for value in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/inbox",
+        ] {
+            let url = url::Url::parse(value).expect("bundled URL");
+            assert!(main_window_navigation_allowed(&url, false), "{value}");
+        }
+        let development = url::Url::parse("http://localhost:1420/inbox").expect("development URL");
+        assert!(main_window_navigation_allowed(&development, true));
+        assert!(!main_window_navigation_allowed(&development, false));
+
+        for value in [
+            "http://localhost:1421/",
+            "http://127.0.0.1:1420/",
+            "https://example.test/",
+            "file:///C:/secret.txt",
+            "about:blank",
+            "https://user:secret@tauri.localhost/",
+        ] {
+            let url = url::Url::parse(value).expect("rejected URL");
+            assert!(!main_window_navigation_allowed(&url, true), "{value}");
+        }
+    }
 
     #[test]
     fn status_mapping_preserves_safe_success_metadata() {
@@ -1580,6 +1787,100 @@ mod tests {
         assert!(!error.message.contains("unimail.db"));
         assert!(!error.message.contains('\\'));
         assert!(!error.message.contains('/'));
+    }
+
+    #[test]
+    fn unavailable_security_storage_uses_only_a_safe_error_code() {
+        let diagnostic = unavailable_storage_diagnostics(
+            CredentialStoreKind::Macos,
+            StorageErrorCode::DatabaseOpenFailed,
+        );
+
+        assert!(!diagnostic.ready);
+        assert_eq!(diagnostic.schema_version, None);
+        assert!(!diagnostic.cipher_available);
+        assert!(!diagnostic.fts5_available);
+        assert_eq!(diagnostic.credential_store, CredentialStoreKind::Macos);
+        assert_eq!(
+            diagnostic.safe_error_code,
+            Some(StorageErrorCode::DatabaseOpenFailed)
+        );
+    }
+
+    #[test]
+    fn provider_security_diagnostics_are_count_only_and_stably_ordered() {
+        let accounts = vec![
+            account(Provider::Gmail, AccountAuthState::Connected, true, false),
+            account(
+                Provider::Gmail,
+                AccountAuthState::NeedsAuthentication,
+                true,
+                false,
+            ),
+            account(Provider::Gmail, AccountAuthState::Unavailable, false, false),
+            account(Provider::Gmail, AccountAuthState::Connected, true, true),
+            account(Provider::Outlook, AccountAuthState::Connected, true, false),
+        ];
+
+        let diagnostics = provider_security_diagnostics(Some(&accounts));
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|row| row.provider)
+                .collect::<Vec<_>>(),
+            [
+                Provider::Gmail,
+                Provider::Outlook,
+                Provider::Qq,
+                Provider::Netease,
+            ]
+        );
+        assert_eq!(diagnostics[0].account_count, Some(3));
+        assert_eq!(diagnostics[0].connected_count, Some(1));
+        assert_eq!(diagnostics[0].reconnect_count, Some(1));
+        assert_eq!(diagnostics[1].account_count, Some(1));
+        assert_eq!(diagnostics[2].account_count, Some(0));
+        assert_eq!(diagnostics[3].account_count, Some(0));
+        let serialized = serde_json::to_string(&diagnostics).expect("serialize diagnostics");
+        for private_value in [
+            "private@example.test",
+            "Private Person",
+            "private-reference",
+            "private-error",
+        ] {
+            assert!(!serialized.contains(private_value));
+        }
+    }
+
+    #[test]
+    fn provider_security_counts_degrade_instead_of_overflowing() {
+        let mut counts = ProviderAccountCounts {
+            total: u32::MAX,
+            connected: 0,
+            reconnect: 0,
+        };
+
+        assert_eq!(
+            counts.include(&account(
+                Provider::Gmail,
+                AccountAuthState::Connected,
+                true,
+                false,
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn provider_security_counts_are_unavailable_when_storage_is_unavailable() {
+        let diagnostics = provider_security_diagnostics(None);
+
+        assert!(diagnostics.iter().all(|row| {
+            row.account_count.is_none()
+                && row.connected_count.is_none()
+                && row.reconnect_count.is_none()
+        }));
     }
 
     #[test]
