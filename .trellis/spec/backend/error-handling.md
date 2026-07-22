@@ -444,3 +444,73 @@ let snapshot = match operations.insert(operation_id, attachment_id, total, cance
     Err(error) => { let _ = repository.abort_attachment_transfer(&transfer); return Err(error); }
 };
 ```
+
+## Scenario: privacy-safe security diagnostics IPC
+
+### 1. Scope / Trigger
+
+Apply when changing local security diagnostics, provider count aggregation, storage degradation,
+generated bindings, or the `security_diagnostics` command.
+
+### 2. Signatures
+
+```rust
+security_diagnostics(StorageState, DesktopConnectivity) -> SecurityDiagnosticsV1
+
+SecurityDiagnosticsV1 {
+    app_version: String,
+    platform: String,
+    online: bool,
+    storage: SecurityStorageDiagnosticsV1,
+    providers: Vec<ProviderSecurityDiagnosticsV1>,
+}
+```
+
+### 3. Contracts
+
+- The command is local-only and infallible: storage/account failures become allowlisted status,
+  never raw errors.
+- Storage exposes readiness, optional schema version, SQLCipher/FTS availability, credential-store
+  kind, and an optional `StorageErrorCode` only.
+- Provider rows are exactly Gmail, Outlook, QQ, and 163 in that order. They expose configured plus
+  optional total/connected/reconnect counts. Gmail/Outlook configuration is a boolean derived from
+  public client-ID presence; the value never crosses IPC.
+- Counts exclude deleting accounts. Connected/reconnect counts include enabled accounts only.
+- The DTO never contains account/message/operation identifiers, addresses, display names, mail,
+  provider cursors, credentials, paths, hostnames, or environment values.
+
+### 4. Validation & Error Matrix
+
+| Condition | Public result |
+| --- | --- |
+| Storage health succeeds | Safe storage status and account query attempt |
+| Initialization or health fails | `ready=false`, `schemaVersion=null`, fixed error code, all counts unavailable |
+| Account listing fails after healthy storage | Storage remains ready; all provider counts unavailable |
+| Count arithmetic would overflow `u32` | Affected counts become unavailable; never wrap |
+| Connectivity is explicitly offline | `online=false`; available/unknown reports `true` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a public support paste shows version/platform/storage status and four count-only rows.
+- Base: an unavailable database still reports credential-store kind and a fixed safe code.
+- Bad: return an account summary, client ID, database path, raw repository error, or fabricated zero
+  counts after a failed query.
+
+### 6. Tests Required
+
+- Core tests assert exact serialization keys and camel-case names.
+- Tauri tests assert stable provider order, deleting/disabled handling, overflow degradation,
+  unavailable-count behavior, and absence of private account values after serialization.
+- Regenerate bindings and run strict frontend decoder tests, `check:security`, Clippy, workspace
+  tests, and a native Tauri build.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: a diagnostic endpoint leaks a raw repository object or failure.
+repository.list_accounts().map_err(|error| error.to_string())
+
+// Correct: aggregate in Rust and degrade to optional counts plus a fixed code.
+let accounts = repository.list_accounts().ok();
+provider_security_diagnostics(accounts.as_deref())
+```

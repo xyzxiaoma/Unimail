@@ -251,3 +251,64 @@ match fs::symlink_metadata(&destination) {
     Err(_) => return Err(internal()),
 }
 ```
+
+## Scenario: owner-only sensitive application files on Unix/macOS
+
+### 1. Scope / Trigger
+
+Apply whenever profile directories, SQLCipher files/sidecars, initialization locks, attachment
+caches, or application-owned transfer files are created, opened, or recovered.
+
+### 2. Signatures
+
+```rust
+ensure_private_directory(&Path) -> io::Result<()>        // mode 0700 on Unix
+ensure_private_file_if_present(&Path) -> io::Result<()>  // mode 0600 on Unix
+configure_private_file_creation(&mut OpenOptions)         // create-time mode 0600
+```
+
+### 3. Contracts
+
+- Correct the application data and attachment-cache directories to `0700` on Unix.
+- Create and correct the database, `-wal`, `-shm`, `.init.lock`, cache, and transfer files to `0600`.
+- Inspect with `symlink_metadata`; never chmod or open through a symlink or non-regular file.
+- Apply create-time mode before a sensitive file becomes visible.
+- A newly saved received attachment inherits the private mode from the application-owned partial
+  file. Never chmod an unrelated pre-existing user destination.
+- Windows continues to use logged-in-user ACL inheritance; the helper is a safe no-op for modes.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Existing owned directory/file has broad Unix mode | Correct to `0700` / `0600` |
+| Sensitive path is absent | File-if-present helper succeeds without creation |
+| Sensitive path is a symlink or wrong file type | Return safe initialization/constraint failure; do not follow it |
+| User-selected destination already exists | Preserve no-clobber rejection; never chmod it |
+| Windows build | Compile without unused arguments/imports; preserve ACL behavior |
+
+### 5. Good / Base / Bad Cases
+
+- Good: startup tightens a previously broad database and sidecar mode before normal use.
+- Base: a new Windows profile relies on its user ACL without Unix-specific calls.
+- Bad: call `metadata`, follow a symlink, chmod a destination selected by the user, or apply mode
+  only after writing sensitive bytes.
+
+### 6. Tests Required
+
+- Unix tests assert exact permission bits and verify a symlink target remains unchanged.
+- Cross-platform SQLCipher/repository tests cover initialization, sidecars, transfer creation,
+  no-clobber finalization, restart cleanup, and hostile paths.
+- Run format, strict Clippy, storage tests, workspace tests, and Windows/macOS native builds.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: follows a link and widens the scope of what may be changed.
+fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+
+// Correct: reject links/non-files before correcting an application-owned path.
+let metadata = fs::symlink_metadata(path)?;
+if metadata.file_type().is_symlink() || !metadata.is_file() { return Err(invalid()); }
+fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+```

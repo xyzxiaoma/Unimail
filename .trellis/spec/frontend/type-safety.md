@@ -497,3 +497,65 @@ useEffect(() => { if (status.data) setOperation(status.data); }, [status.data]);
 // Correct: polling data is already the current server-state projection.
 const current = status.data ?? operation;
 ```
+
+## Mandatory Seven-Section Scenario: local security diagnostics UI
+
+### 1. Scope / Trigger
+
+Apply to the generated security DTOs, `src/lib/ipc/security-diagnostics.ts`, diagnostic text
+formatting, and the “安全与诊断” modal.
+
+### 2. Signature and Flow
+
+```text
+Rust SecurityDiagnosticsV1 -> Tauri Promise<unknown> -> exact decoder
+  -> count-only Chinese formatter -> keyboard-contained read-only modal
+```
+
+### 3. Contract
+
+- The decoder requires exact root, storage, and provider keys; extra fields are rejected rather
+  than projected away silently.
+- Provider rows are exactly `gmail`, `outlook`, `qq`, `netease` in stable order.
+- Counts are either all `null` or all unsigned `u32`; `connected + reconnect <= total`.
+- Ready storage requires a schema version and no error code. Unavailable storage requires a null
+  schema version and a known fixed error code.
+- Visible text is Simplified Chinese, selectable, local-only, and has no copy/save/upload action.
+- The modal focuses its close button, traps Tab/Shift+Tab, handles Escape, restores opener focus,
+  and suppresses global compose shortcuts while open.
+
+### 4. Runtime Validation and Errors
+
+| Runtime value | Behavior |
+| --- | --- |
+| Missing/wrong/extra field | Throw `TypeError`; render no diagnostic payload |
+| Provider order/enum/count relationship invalid | Throw `TypeError` |
+| All provider counts are null | Display “不可用”; never substitute zero |
+| Command rejects | Show fixed generic Chinese copy and a retry action |
+| Retry completes after unmount | Ignore completion; do not update unmounted state |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the user can select a count-only public support summary without granting new capabilities.
+- Base: storage unavailable displays fixed local status and unavailable provider counts.
+- Bad: cast generated `unknown`, accept an extra path/address field, add clipboard permissions, or
+  let the compose shortcut open behind the modal.
+
+### 6. Tests Required
+
+- Decoder tables cover exact success, unavailable storage, mixed null counts, overflow relations,
+  provider order, and injected private fields.
+- Component tests cover loading/failure/retry, selectable text, Escape, focus containment, and
+  absence of private values.
+- App tests cover opening, close focus restoration, and compose-shortcut suppression.
+- Run format, lint, typecheck, full Vitest, build, binding drift, and security checks.
+
+### 7. Wrong vs Correct
+
+```tsx
+// Wrong: trusts a generated compile-time type and exposes arbitrary fields.
+const diagnostic = (await securityDiagnostics()) as SecurityDiagnosticsV1;
+
+// Correct: decode the unknown transport value before formatting allowlisted fields.
+const diagnostic = decodeSecurityDiagnostics(await securityDiagnostics());
+```

@@ -14,9 +14,9 @@ implemented integrations.
 | Guide | Current scope | Status |
 | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | Workspace ownership and dependency direction | Foundation established |
-| [Database Guidelines](./database-guidelines.md) | SQLCipher, V1-V4 migrations, repositories, CJK FTS, outbound attempts, and attachment cleanup recovery | Attachments/search storage established |
-| [Error Handling](./error-handling.md) | Safe application, storage, reader, compose/send, search, and attachment IPC contracts | Attachments/search IPC established |
-| [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
+| [Database Guidelines](./database-guidelines.md) | SQLCipher, V1-V4 migrations, repositories, CJK FTS, outbound attempts, attachment cleanup, and owner-only sensitive files | Security storage policy established |
+| [Error Handling](./error-handling.md) | Safe application, storage, reader, compose/send, search, attachment, and privacy-diagnostic IPC contracts | Security diagnostics IPC established |
+| [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, security/dependency gates, forbidden patterns | Security gate established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
 | [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, Gmail/Graph OAuth and APIs, cursor safety, MIME budgets, conformance, and send ambiguity | Gmail and Outlook adapters established |
 | [Sync and Offline Guidelines](./sync-offline-guidelines.md) | Durable sync orchestration, read intent generations, retry/cancellation, and offline send review | Sync core established |

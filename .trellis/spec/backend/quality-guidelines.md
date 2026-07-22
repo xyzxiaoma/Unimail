@@ -77,3 +77,71 @@ the diff, and retain frontend runtime decoding because the transport result rema
 - Do all required commands pass without warnings?
 - Does a user-visible change include a Simplified Chinese `未发布` changelog entry?
 - Does `npm run check:paths` still reject generated/sensitive local artifacts?
+
+## Scenario: deterministic security and dependency gate
+
+### 1. Scope / Trigger
+
+Apply when changing Tauri permissions/CSP, runtime output, diagnostic fields, dependencies,
+licenses, CI validation, or release-tag validation.
+
+### 2. Signatures
+
+```text
+npm run check:security
+npm run check:security:self-test
+cargo audit
+cargo deny check --warn unmaintained
+```
+
+### 3. Contracts
+
+- `check:security` enforces the exact main-window permission list and required CSP directives,
+  scans tracked text for high-confidence secret signatures, rejects Rust/React runtime output,
+  rejects forbidden diagnostic field names, and checks production npm licenses.
+- Build-time binding exporter output is the only Rust output exception; fictional script fixtures
+  remain explicit.
+- Cargo policy denies vulnerabilities, yanked crates, disallowed licenses, wildcard registry
+  dependencies, and unknown sources. Internal workspace crates set `publish=false`, allowing local
+  path dependencies without weakening registry policy.
+- `cargo-deny 0.20.2` and `cargo-audit 0.22.2` are pinned in CI.
+- Unmaintained advisories remain visible warnings through `--warn unmaintained`; they are reviewed,
+  not added to a silent ignore list. Actual vulnerabilities still fail.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Capability/CSP differs from exact policy | `check:security` fails |
+| High-confidence key/token signature or runtime output appears | `check:security` fails |
+| New production npm/Rust license is not allowlisted | Gate fails pending review |
+| Actual RustSec vulnerability or yanked crate appears | Gate fails |
+| Known unmaintained transitive dependency appears | Printed warning; command succeeds only via explicit CLI downgrade |
+| Unknown registry/git source appears | Gate fails |
+
+### 5. Good / Base / Bad Cases
+
+- Good: lockfile-based local and CI checks produce the same pass/fail result without service tokens.
+- Base: reviewed Tauri/urlpattern/scraper maintenance warnings stay visible on every run.
+- Bad: add broad file exclusions, `ignore` actual advisories, allow all licenses/sources, or weaken
+  runtime-output scanning to make a failure disappear.
+
+### 6. Tests Required
+
+- Run security self-test and normal gate.
+- Run production npm audit, RustSec audit, and cargo-deny for all Windows/macOS targets.
+- Run frontend/Rust aggregate validation plus native Tauri packaging after capability/CSP changes.
+- Inspect `git diff --check`, tracked paths, and workflow pin versions.
+
+### 7. Wrong vs Correct
+
+```toml
+# Wrong: hides all dependency risk.
+[advisories]
+ignore = ["*"]
+
+# Correct: vulnerabilities fail while informational maintenance issues remain visible.
+[advisories]
+unmaintained = "all"
+ignore = []
+```
