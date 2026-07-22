@@ -171,3 +171,10 @@ Also verify in Actions:
 - The task remains `in_progress`: production Authenticode, Developer ID signing/notarization,
   protected-environment approval, and the first real tag/publication stay owner-controlled and have
   not been executed.
+- A 2026-07-22 public GitHub audit still shows zero tags and zero Releases. The public API cannot
+  confirm protected Environment rules, and this execution environment does not expose an approved
+  authenticated repository-administration API path.
+- The successful dry run reported Windows `unsigned` and macOS `adhoc`, so production signing
+  material was not active for that run. A real tag remains intentionally withheld until complete
+  Authenticode and Apple Developer ID/notarization Secrets are configured and the `release`
+  Environment has a required owner reviewer.
