@@ -1,0 +1,244 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openExternalLink } from "../../lib/ipc/external-link";
+import { getInboxPage, getMailMessageDetail, setMailMessageRead } from "../../lib/ipc/mail-reader";
+import { MailWorkspace } from "./MailWorkspace";
+
+vi.mock("../../lib/ipc/mail-reader", () => ({
+  getInboxPage: vi.fn(),
+  getMailMessageDetail: vi.fn(),
+  setMailMessageRead: vi.fn(),
+}));
+
+vi.mock("../../lib/ipc/external-link", () => ({
+  openExternalLink: vi.fn(),
+}));
+
+const messageId = "00000000-0000-4000-8000-000000000001";
+const secondMessageId = "00000000-0000-4000-8000-000000000004";
+const accountId = "00000000-0000-4000-8000-000000000002";
+const mailboxId = "00000000-0000-4000-8000-000000000003";
+const summary = {
+  id: messageId,
+  accountId,
+  mailboxId,
+  subject: "统一收件箱测试",
+  snippet: "虚构邮件摘要",
+  senderName: "测试发件人",
+  senderAddress: "sender@example.test",
+  read: false,
+  direction: "incoming" as const,
+  sentAtMs: null,
+  receivedAtMs: "42",
+  hasAttachments: false,
+};
+
+function renderWorkspace() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <MailWorkspace
+        accounts={[
+          {
+            id: accountId,
+            provider: "gmail",
+            email: "owner@example.test",
+            displayName: "测试账户",
+            authState: "connected",
+          },
+        ]}
+        onAddAccount={vi.fn()}
+        onSync={vi.fn()}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+describe("MailWorkspace", () => {
+  beforeEach(() => {
+    vi.mocked(getInboxPage).mockReset();
+    vi.mocked(getMailMessageDetail).mockReset();
+    vi.mocked(setMailMessageRead).mockReset();
+    vi.mocked(openExternalLink).mockReset();
+  });
+  afterEach(cleanup);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("展示本地邮件详情并在稳定选择 800ms 后写入已读状态", async () => {
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [summary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue({
+      summary,
+      threadId: null,
+      rfcMessageId: null,
+      plainBody: "这是虚构的本地缓存正文。",
+      htmlBody: null,
+      parserVersion: 1,
+      sanitizerVersion: 1,
+      addresses: [
+        {
+          role: "from",
+          position: 0,
+          displayName: "测试发件人",
+          address: "sender@example.test",
+        },
+      ],
+      attachments: [],
+    });
+    vi.mocked(setMailMessageRead).mockResolvedValue({
+      messageId,
+      read: true,
+      generation: "1",
+    });
+    renderWorkspace();
+
+    expect(await screen.findByRole("option", { name: /测试发件人/ })).toBeTruthy();
+    expect(await screen.findByText("这是虚构的本地缓存正文。")).toBeTruthy();
+    await waitFor(() => expect(setMailMessageRead).toHaveBeenCalledWith(messageId, true), {
+      timeout: 1_500,
+    });
+  });
+
+  it("外部链接取消时不调用系统浏览器，确认时只打开展示的完整地址", async () => {
+    const readSummary = { ...summary, read: true };
+    const url = "https://docs.example.test/path?source=mail";
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue({
+      summary: readSummary,
+      threadId: null,
+      rfcMessageId: null,
+      plainBody: null,
+      htmlBody: `<a href="${url}">查看文档</a>`,
+      parserVersion: 1,
+      sanitizerVersion: 1,
+      addresses: [],
+      attachments: [],
+    });
+    renderWorkspace();
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看文档" }));
+    const dialog = screen.getByRole("dialog", { name: "确认打开外部链接" });
+    expect(within(dialog).getByText("docs.example.test")).toBeTruthy();
+    expect(within(dialog).getByText(url)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(openExternalLink).not.toHaveBeenCalled();
+
+    vi.mocked(openExternalLink).mockResolvedValueOnce();
+    fireEvent.click(screen.getByRole("button", { name: "查看文档" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开浏览器" }));
+    await waitFor(() => expect(openExternalLink).toHaveBeenCalledWith(url));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "确认打开外部链接" })).toBeNull(),
+    );
+
+    vi.mocked(openExternalLink).mockRejectedValueOnce(new Error("fictional opener failure"));
+    fireEvent.click(screen.getByRole("button", { name: "查看文档" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开浏览器" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法打开系统浏览器，请稍后重试。");
+  });
+
+  it("快速使用 J 切换邮件时取消旧的 800ms 已读计时", async () => {
+    const secondSummary = {
+      ...summary,
+      id: secondMessageId,
+      subject: "第二封邮件",
+      receivedAtMs: "41",
+    };
+    vi.mocked(getInboxPage).mockResolvedValue({
+      items: [summary, secondSummary],
+      nextCursor: null,
+    });
+    vi.mocked(getMailMessageDetail).mockImplementation((id) =>
+      Promise.resolve({
+        summary: id === messageId ? summary : secondSummary,
+        threadId: null,
+        rfcMessageId: null,
+        plainBody: id === messageId ? "第一封正文" : "第二封正文",
+        htmlBody: null,
+        parserVersion: 1,
+        sanitizerVersion: 1,
+        addresses: [],
+        attachments: [],
+      }),
+    );
+    vi.mocked(setMailMessageRead).mockResolvedValue({
+      messageId: secondMessageId,
+      read: true,
+      generation: "1",
+    });
+    renderWorkspace();
+
+    expect(await screen.findByText("第一封正文")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "j" });
+    expect(await screen.findByText("第二封正文")).toBeTruthy();
+    await waitFor(() => expect(setMailMessageRead).toHaveBeenCalledWith(secondMessageId, true), {
+      timeout: 1_500,
+    });
+    expect(setMailMessageRead).toHaveBeenCalledTimes(1);
+    expect(setMailMessageRead).not.toHaveBeenCalledWith(messageId, true);
+  });
+
+  it("列表接近底部时只自动请求一次下一页并保留已有邮件", async () => {
+    let intersectionCallback!: IntersectionObserverCallback;
+    class FakeIntersectionObserver implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) {
+        intersectionCallback = callback;
+      }
+      disconnect() {}
+      observe() {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+      unobserve() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const firstSummary = { ...summary, read: true };
+    const secondSummary = {
+      ...summary,
+      id: secondMessageId,
+      subject: "下一页邮件",
+      receivedAtMs: "41",
+      read: true,
+    };
+    vi.mocked(getInboxPage).mockImplementation((request) =>
+      Promise.resolve(
+        request.cursor
+          ? { items: [secondSummary], nextCursor: null }
+          : { items: [firstSummary], nextCursor: "v1:42:next" },
+      ),
+    );
+    vi.mocked(getMailMessageDetail).mockImplementation((id) =>
+      Promise.resolve({
+        summary: id === messageId ? firstSummary : secondSummary,
+        threadId: null,
+        rfcMessageId: null,
+        plainBody: "分页测试正文",
+        htmlBody: null,
+        parserVersion: 1,
+        sanitizerVersion: 1,
+        addresses: [],
+        attachments: [],
+      }),
+    );
+    renderWorkspace();
+
+    expect(await screen.findByRole("option", { name: /统一收件箱测试/ })).toBeTruthy();
+    const entry = { isIntersecting: true } as IntersectionObserverEntry;
+    intersectionCallback([entry], {} as IntersectionObserver);
+    intersectionCallback([entry], {} as IntersectionObserver);
+    expect(await screen.findByRole("option", { name: /下一页邮件/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /统一收件箱测试/ })).toBeTruthy();
+    expect(getInboxPage).toHaveBeenCalledTimes(2);
+    expect(getInboxPage).toHaveBeenLastCalledWith({
+      accountId: null,
+      unreadOnly: false,
+      cursor: "v1:42:next",
+      limit: 50,
+    });
+  });
+});

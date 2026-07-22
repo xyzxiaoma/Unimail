@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { getConnectedAccounts, getOAuthOnboardingStatus } from "./lib/ipc/oauth-onboarding";
@@ -23,10 +24,27 @@ vi.mock("./lib/ipc/oauth-onboarding", () => ({
   startOAuthOnboarding: vi.fn(),
 }));
 
+vi.mock("./lib/ipc/mail-reader", () => ({
+  getInboxPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+  getMailMessageDetail: vi.fn(),
+  setMailMessageRead: vi.fn(),
+}));
+
 const mockedDecodeStorageCommandError = vi.mocked(decodeStorageCommandError);
 const mockedGetStorageStatus = vi.mocked(getStorageStatus);
 const mockedGetConnectedAccounts = vi.mocked(getConnectedAccounts);
 const mockedGetOAuthOnboardingStatus = vi.mocked(getOAuthOnboardingStatus);
+
+function renderApp() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>,
+  );
+}
 
 describe("Unimail 基础界面", () => {
   beforeEach(() => {
@@ -55,19 +73,19 @@ describe("Unimail 基础界面", () => {
     cleanup();
   });
 
-  it("展示中文三栏空状态和桌面状态占位", () => {
-    render(<App />);
+  it("展示中文三栏空状态和桌面状态占位", async () => {
+    renderApp();
 
     expect(screen.getByRole("navigation", { name: "邮件文件夹" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "收件箱", level: 1 })).toBeTruthy();
-    expect(screen.getByText("收件箱空空如也")).toBeTruthy();
+    expect(await screen.findByText("收件箱空空如也")).toBeTruthy();
     expect(screen.getByText("选择一封邮件开始阅读")).toBeTruthy();
-    expect(screen.getByText("正在检查加密存储")).toBeTruthy();
+    expect(screen.getByText("无法读取加密存储状态")).toBeTruthy();
     expect(screen.getByText("等待添加账户")).toBeTruthy();
   });
 
   it("可通过按钮打开写邮件占位并用 Escape 关闭", () => {
-    render(<App />);
+    renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: /写邮件/ }));
     expect(screen.getByRole("dialog", { name: "撰写邮件" })).toBeTruthy();
@@ -78,7 +96,7 @@ describe("Unimail 基础界面", () => {
   });
 
   it("同步占位会提供非破坏性的状态反馈", () => {
-    render(<App />);
+    renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: "同步邮件" }));
     expect(screen.getByText("尚无可同步账户")).toBeTruthy();
@@ -95,26 +113,26 @@ describe("Unimail 基础界面", () => {
       },
     ]);
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByText("Gmail 账户需要重新连接")).toBeTruthy();
     expect(screen.getByText("重新连接 Gmail")).toBeTruthy();
   });
 
   it("两个添加账户入口都打开 邮箱连接对话框", async () => {
-    const { unmount } = render(<App />);
+    const { unmount } = renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
     unmount();
 
-    render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "添加邮箱账户" }));
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "添加邮箱账户" }));
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
   });
 
   it("邮箱连接对话框响应 Escape 并把焦点还给入口", async () => {
-    render(<App />);
+    renderApp();
     const opener = screen.getByRole("button", { name: "开始设置" });
     fireEvent.click(opener);
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
@@ -125,7 +143,7 @@ describe("Unimail 基础界面", () => {
   });
 
   it("邮箱连接对话框打开时不会响应写邮件快捷键", async () => {
-    render(<App />);
+    renderApp();
     fireEvent.click(screen.getByRole("button", { name: "开始设置" }));
     expect(await screen.findByRole("dialog", { name: "连接 Gmail" })).toBeTruthy();
 
@@ -142,7 +160,7 @@ describe("Unimail 基础界面", () => {
       credentialStore: "windows",
     });
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByText("加密存储已就绪 · Schema 1")).toBeTruthy();
   });
@@ -155,7 +173,7 @@ describe("Unimail 基础界面", () => {
       retryable: true,
     });
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByText("无法读取加密存储状态")).toBeTruthy();
     expect(screen.queryByText(leakedPath)).toBeNull();

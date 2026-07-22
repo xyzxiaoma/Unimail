@@ -3,6 +3,7 @@ import "./App.css";
 import { OAuthOnboardingDialog } from "./features/accounts/OAuthOnboardingDialog";
 import { AuthorizationCodeOnboardingDialog } from "./features/accounts/AuthorizationCodeOnboardingDialog";
 import type { AuthorizationCodeProvider } from "./lib/ipc/authorization-code-onboarding";
+import { MailWorkspace } from "./features/inbox/MailWorkspace";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
 import { getConnectedAccounts, type ConnectedAccountSummary } from "./lib/ipc/oauth-onboarding";
 import {
@@ -206,109 +207,6 @@ function Sidebar({
         设置
       </button>
     </aside>
-  );
-}
-
-function MessageList({
-  onAddAccount,
-  onSync,
-}: {
-  onAddAccount: (opener: HTMLButtonElement) => void;
-  onSync: () => void;
-}) {
-  const searchId = useId();
-
-  return (
-    <section className="message-pane" aria-labelledby="inbox-heading">
-      <header className="message-header">
-        <div>
-          <p className="eyebrow">全部账户</p>
-          <h1 id="inbox-heading">收件箱</h1>
-        </div>
-        <div className="header-actions">
-          <button className="icon-button" type="button" onClick={onSync} aria-label="同步邮件">
-            <Icon name="sync" />
-          </button>
-          <button className="icon-button" type="button" aria-label="更多收件箱操作">
-            <Icon name="more" />
-          </button>
-        </div>
-      </header>
-
-      <form className="search" role="search" onSubmit={(event) => event.preventDefault()}>
-        <label className="sr-only" htmlFor={searchId}>
-          搜索邮件
-        </label>
-        <Icon name="search" />
-        <input id={searchId} type="search" placeholder="搜索邮件" autoComplete="off" />
-        <kbd>⌘ K</kbd>
-      </form>
-
-      <div className="filter-row">
-        <div role="group" aria-label="邮件筛选">
-          <button className="filter active" type="button" aria-pressed="true">
-            全部
-          </button>
-          <button className="filter" type="button" aria-pressed="false">
-            未读
-          </button>
-        </div>
-        <button className="sort-button" type="button">
-          最新优先 <Icon name="chevron" size={14} />
-        </button>
-      </div>
-
-      <div className="empty-list">
-        <div className="empty-illustration mail-stack" aria-hidden="true">
-          <span className="paper paper-back" />
-          <span className="paper paper-front">
-            <Icon name="mail" size={28} />
-          </span>
-          <span className="spark spark-one">✦</span>
-          <span className="spark spark-two">✧</span>
-        </div>
-        <h2>收件箱空空如也</h2>
-        <p>添加邮箱账户后，新邮件会出现在这里。</p>
-        <button
-          className="secondary-action"
-          onClick={(event) => onAddAccount(event.currentTarget)}
-          type="button"
-        >
-          添加邮箱账户
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function ReaderPane() {
-  return (
-    <section className="reader-pane" aria-labelledby="reader-heading">
-      <div className="reader-toolbar" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </div>
-      <div className="reader-empty">
-        <div className="empty-illustration reader-art" aria-hidden="true">
-          <span className="reader-envelope">
-            <Icon name="mail" size={34} />
-          </span>
-          <span className="reader-orbit orbit-one" />
-          <span className="reader-orbit orbit-two" />
-          <span className="reader-spark">
-            <Icon name="sparkles" size={17} />
-          </span>
-        </div>
-        <h2 id="reader-heading">选择一封邮件开始阅读</h2>
-        <p>邮件内容将在这里安静地展开。</p>
-        <div className="shortcut-hint">
-          <kbd>J</kbd>
-          <kbd>K</kbd>
-          <span>切换邮件</span>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -544,13 +442,13 @@ export default function App() {
           onAddAccount={openOAuthDialog}
           onCompose={() => setComposeOpen(true)}
         />
-        <MessageList
+        <MailWorkspace
+          accounts={connectedAccounts}
           onAddAccount={(opener) => openOAuthDialog(null, opener)}
           onSync={() =>
             setSyncMessage(connectedAccounts.length > 0 ? "正在请求邮箱同步" : "尚无可同步账户")
           }
         />
-        <ReaderPane />
         {composeOpen && <ComposePanel onClose={closeCompose} />}
         {oauthDialogOpen && (
           <OAuthOnboardingDialog
