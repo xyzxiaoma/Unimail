@@ -30,6 +30,22 @@ vi.mock("./lib/ipc/mail-reader", () => ({
   setMailMessageRead: vi.fn(),
 }));
 
+vi.mock("./lib/ipc/compose", () => ({
+  createLocalReplyDraft: vi.fn(),
+  decodeComposeCommandError: vi.fn(() => {
+    throw new TypeError("invalid test rejection");
+  }),
+  getDrafts: vi.fn().mockResolvedValue([]),
+  getLocalDraft: vi.fn(),
+  getSentItems: vi.fn().mockResolvedValue([]),
+  permitOutboundRetry: vi.fn(),
+  refreshLocalSentItems: vi.fn(),
+  removeLocalDraft: vi.fn(),
+  reportDesktopConnectivity: vi.fn().mockResolvedValue(undefined),
+  saveLocalDraft: vi.fn(),
+  submitLocalDraft: vi.fn(),
+}));
+
 const mockedDecodeStorageCommandError = vi.mocked(decodeStorageCommandError);
 const mockedGetStorageStatus = vi.mocked(getStorageStatus);
 const mockedGetConnectedAccounts = vi.mocked(getConnectedAccounts);
@@ -84,15 +100,29 @@ describe("Unimail 基础界面", () => {
     expect(screen.getByText("等待添加账户")).toBeTruthy();
   });
 
-  it("可通过按钮打开写邮件占位并用 Escape 关闭", () => {
+  it("可通过按钮打开真实写信表单并用 Escape 关闭", async () => {
     renderApp();
 
     fireEvent.click(screen.getByRole("button", { name: /写邮件/ }));
     expect(screen.getByRole("dialog", { name: "撰写邮件" })).toBeTruthy();
-    expect(screen.getByPlaceholderText("邮件编辑功能将在后续版本开放")).toBeTruthy();
+    expect(screen.getByPlaceholderText("name@example.com，多个地址用逗号分隔")).toBeTruthy();
+    expect(screen.getByPlaceholderText("邮件主题")).toBeTruthy();
+    expect(screen.getByPlaceholderText("输入邮件正文")).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "撰写邮件" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "撰写邮件" })).toBeNull());
+  });
+
+  it("草稿与已发送侧栏入口切换到真实固定视图", async () => {
+    renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "草稿" }));
+    expect(await screen.findByRole("heading", { name: "草稿", level: 1 })).toBeTruthy();
+    expect(screen.getByText("还没有草稿")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "已发送" }));
+    expect(await screen.findByRole("heading", { name: "已发送", level: 1 })).toBeTruthy();
+    expect(await screen.findByText("还没有发送记录")).toBeTruthy();
   });
 
   it("同步占位会提供非破坏性的状态反馈", () => {

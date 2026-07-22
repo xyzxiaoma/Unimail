@@ -34,7 +34,7 @@ const summary = {
   hasAttachments: false,
 };
 
-function renderWorkspace() {
+function renderWorkspace(onReply = vi.fn()) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -51,6 +51,7 @@ function renderWorkspace() {
           },
         ]}
         onAddAccount={vi.fn()}
+        onReply={onReply}
         onSync={vi.fn()}
       />
     </QueryClientProvider>,
@@ -99,6 +100,28 @@ describe("MailWorkspace", () => {
     await waitFor(() => expect(setMailMessageRead).toHaveBeenCalledWith(messageId, true), {
       timeout: 1_500,
     });
+  });
+
+  it("从阅读器提供单一回复入口并传递本地邮件 ID", async () => {
+    const readSummary = { ...summary, read: true };
+    const onReply = vi.fn();
+    vi.mocked(getInboxPage).mockResolvedValue({ items: [readSummary], nextCursor: null });
+    vi.mocked(getMailMessageDetail).mockResolvedValue({
+      summary: readSummary,
+      threadId: null,
+      rfcMessageId: null,
+      plainBody: "用于回复入口测试的正文。",
+      htmlBody: null,
+      parserVersion: 1,
+      sanitizerVersion: 1,
+      addresses: [],
+      attachments: [],
+    });
+    renderWorkspace(onReply);
+
+    fireEvent.click(await screen.findByRole("button", { name: "回复" }));
+    expect(onReply).toHaveBeenCalledWith(messageId);
+    expect(screen.queryByRole("button", { name: "回复全部" })).toBeNull();
   });
 
   it("外部链接取消时不调用系统浏览器，确认时只打开展示的完整地址", async () => {

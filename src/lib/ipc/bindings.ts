@@ -46,6 +46,34 @@ export type MessageDetailV1 = { summary: InboxMessageSummaryV1, threadId: string
 
 export type AssignReadStateResultV1 = { messageId: string, read: boolean, generation: string, };
 
+export type ComposeCommandErrorCode = "invalid_data" | "not_found" | "revision_conflict" | "account_unavailable" | "empty_subject_confirmation_required" | "offline_review_confirmation_required" | "send_locked" | "storage_unavailable" | "internal";
+
+export type ComposeCommandError = { code: ComposeCommandErrorCode, message: string, retryable: boolean, };
+
+export type DraftAddressV1 = { displayName: string | null, address: string, };
+
+export type DraftV1 = { id: string, accountId: string, to: Array<DraftAddressV1>, cc: Array<DraftAddressV1>, bcc: Array<DraftAddressV1>, subject: string, plainBody: string, reply: boolean, revision: string, createdAtMs: string, updatedAtMs: string, offlineReviewRequired: boolean, };
+
+export type DraftSummaryV1 = { id: string, accountId: string, subject: string, recipientCount: number, revision: string, updatedAtMs: string, offlineReviewRequired: boolean, };
+
+export type SaveDraftRequestV1 = { draftId: string | null, accountId: string, to: Array<DraftAddressV1>, cc: Array<DraftAddressV1>, bcc: Array<DraftAddressV1>, subject: string, plainBody: string, expectedRevision: string | null, };
+
+export type ExplicitSendRequestV1 = { draftId: string, draftRevision: string, emptySubjectConfirmed: boolean, offlineReviewConfirmed: boolean, };
+
+export type ExplicitSendStateV1 = "offline_saved" | "accepted_pending" | "rejected" | "unknown_locked";
+
+export type OutboundAttemptState = "submitting" | "accepted_pending" | "reconciled" | "rejected" | "unknown_locked";
+
+export type OutboundFailureCode = "recipient_rejected" | "authentication_required" | "provider_unavailable" | "invalid_draft" | "internal";
+
+export type ExplicitSendResultV1 = { state: ExplicitSendStateV1, draft: DraftV1 | null, attemptId: string | null, errorCode: OutboundFailureCode | null, };
+
+export type SentItemV1 = { attemptId: string, draftId: string, accountId: string, state: OutboundAttemptState, sender: DraftAddressV1, to: Array<DraftAddressV1>, cc: Array<DraftAddressV1>, bcc: Array<DraftAddressV1>, subject: string, plainBody: string, providerObserved: boolean, reconciledMessageId: string | null, canAuthorizeRetry: boolean, retryAuthorized: boolean, updatedAtMs: string, };
+
+export type SentRefreshResultV1 = { accountId: string, updatedAttempts: number, };
+
+export type RetryAuthorizationResultV1 = { attemptId: string, authorized: boolean, };
+
 export function applicationInfo(): Promise<unknown> {
   return invoke("application_info");
 }
@@ -84,6 +112,46 @@ export function getMessageDetail(messageId: string): Promise<unknown> {
 
 export function assignMessageReadState(messageId: string, read: boolean): Promise<unknown> {
   return invoke("assign_message_read_state", { messageId, read });
+}
+
+export function listDrafts(accountId: string | null): Promise<unknown> {
+  return invoke("list_drafts", { accountId });
+}
+
+export function getDraft(draftId: string): Promise<unknown> {
+  return invoke("get_draft", { draftId });
+}
+
+export function saveDraft(request: SaveDraftRequestV1): Promise<unknown> {
+  return invoke("save_draft", { request });
+}
+
+export function deleteDraft(draftId: string): Promise<unknown> {
+  return invoke("delete_draft", { draftId });
+}
+
+export function createReplyDraft(messageId: string): Promise<unknown> {
+  return invoke("create_reply_draft", { messageId });
+}
+
+export function sendDraft(request: ExplicitSendRequestV1): Promise<unknown> {
+  return invoke("send_draft", { request });
+}
+
+export function listSentItems(accountId: string | null): Promise<unknown> {
+  return invoke("list_sent_items", { accountId });
+}
+
+export function refreshSentItems(accountId: string): Promise<unknown> {
+  return invoke("refresh_sent_items", { accountId });
+}
+
+export function authorizeOutboundRetry(attemptId: string): Promise<unknown> {
+  return invoke("authorize_outbound_retry", { attemptId });
+}
+
+export function reportConnectivity(online: boolean): Promise<unknown> {
+  return invoke("report_connectivity", { online });
 }
 
 export function fetchMessageRemoteImage(messageId: string, url: string): Promise<unknown> {

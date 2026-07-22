@@ -40,10 +40,12 @@ function ReaderPane({
   messageId,
   account,
   onExternalLink,
+  onReply,
 }: {
   messageId: string | null;
   account: ConnectedAccountSummary | null;
   onExternalLink: (url: string) => void;
+  onReply: (messageId: string) => void;
 }) {
   const detail = useQuery({
     queryKey: ["message-detail", messageId],
@@ -81,8 +83,15 @@ function ReaderPane({
   return (
     <section className="reader-pane reader-content" aria-labelledby="reader-heading">
       <header className="reader-message-header">
-        <p className="eyebrow">{account?.email ?? mailReaderContent.cached}</p>
-        <h2 id="reader-heading">{message.summary.subject || "（无主题）"}</h2>
+        <div className="reader-heading-row">
+          <div>
+            <p className="eyebrow">{account?.email ?? mailReaderContent.cached}</p>
+            <h2 id="reader-heading">{message.summary.subject || "（无主题）"}</h2>
+          </div>
+          <button type="button" className="reader-reply-button" onClick={() => onReply(messageId)}>
+            回复
+          </button>
+        </div>
         <div className="reader-addresses">
           <strong>{from?.displayName ?? from?.address ?? senderLabel(message.summary)}</strong>
           {from?.address && <span>{from.address}</span>}
@@ -123,10 +132,12 @@ function ReaderPane({
 export function MailWorkspace({
   accounts,
   onAddAccount,
+  onReply,
   onSync,
 }: {
   accounts: ConnectedAccountSummary[];
   onAddAccount: (opener: HTMLButtonElement) => void;
+  onReply: (messageId: string) => void;
   onSync: () => void;
 }) {
   const [accountId, setAccountId] = useState<string | null>(null);
@@ -396,6 +407,7 @@ export function MailWorkspace({
         messageId={selectedId}
         account={selected ? (accountsById.get(selected.accountId) ?? null) : null}
         onExternalLink={setExternalUrl}
+        onReply={onReply}
       />
       {externalUrl && (
         <div className="link-dialog-backdrop" role="presentation">

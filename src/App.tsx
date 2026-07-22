@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { OAuthOnboardingDialog } from "./features/accounts/OAuthOnboardingDialog";
 import { AuthorizationCodeOnboardingDialog } from "./features/accounts/AuthorizationCodeOnboardingDialog";
+import { ComposePanel } from "./features/compose/ComposePanel";
+import { DraftsView } from "./features/compose/DraftsView";
+import { SentView } from "./features/compose/SentView";
 import type { AuthorizationCodeProvider } from "./lib/ipc/authorization-code-onboarding";
 import { MailWorkspace } from "./features/inbox/MailWorkspace";
 import { getApplicationInfo, type ApplicationInfo } from "./lib/ipc/application-info";
+import { createLocalReplyDraft, reportDesktopConnectivity } from "./lib/ipc/compose";
 import { getConnectedAccounts, type ConnectedAccountSummary } from "./lib/ipc/oauth-onboarding";
 import {
   decodeStorageCommandError,
@@ -107,20 +111,26 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   );
 }
 
-const folders: Array<{ icon: IconName; label: string; count?: number }> = [
-  { icon: "inbox", label: "收件箱", count: 0 },
-  { icon: "paper-plane", label: "已发送" },
-  { icon: "draft", label: "草稿" },
+type MailView = "inbox" | "sent" | "drafts";
+
+const folders: Array<{ id: MailView; icon: IconName; label: string; count?: number }> = [
+  { id: "inbox", icon: "inbox", label: "收件箱", count: 0 },
+  { id: "sent", icon: "paper-plane", label: "已发送" },
+  { id: "drafts", icon: "draft", label: "草稿" },
 ];
 
 function Sidebar({
   accounts,
+  activeView,
   onAddAccount,
   onCompose,
+  onViewChange,
 }: {
   accounts: ConnectedAccountSummary[];
+  activeView: MailView;
   onAddAccount: (account: ConnectedAccountSummary | null, opener: HTMLButtonElement) => void;
   onCompose: () => void;
+  onViewChange: (view: MailView) => void;
 }) {
   return (
     <aside className="sidebar" aria-label="邮箱导航">
@@ -140,11 +150,12 @@ function Sidebar({
       <nav aria-label="邮件文件夹">
         <p className="nav-caption">邮箱</p>
         <ul className="nav-list">
-          {folders.map((folder, index) => (
+          {folders.map((folder) => (
             <li key={folder.label}>
               <button
-                aria-current={index === 0 ? "page" : undefined}
-                className={index === 0 ? "nav-item active" : "nav-item"}
+                aria-current={activeView === folder.id ? "page" : undefined}
+                className={activeView === folder.id ? "nav-item active" : "nav-item"}
+                onClick={() => onViewChange(folder.id)}
                 type="button"
               >
                 <Icon name={folder.icon} />
@@ -210,52 +221,6 @@ function Sidebar({
   );
 }
 
-function ComposePanel({ onClose }: { onClose: () => void }) {
-  const titleId = useId();
-
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  return (
-    <section className="compose-panel" role="dialog" aria-labelledby={titleId} aria-modal="false">
-      <header>
-        <div>
-          <p className="eyebrow">新邮件</p>
-          <h2 id={titleId}>撰写邮件</h2>
-        </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="关闭写邮件窗口">
-          <Icon name="x" />
-        </button>
-      </header>
-      <form onSubmit={(event) => event.preventDefault()}>
-        <label>
-          收件人
-          <input autoFocus type="email" placeholder="添加邮箱账户后即可填写" readOnly />
-        </label>
-        <label>
-          主题
-          <input type="text" placeholder="邮件主题" readOnly />
-        </label>
-        <label className="body-field">
-          <span className="sr-only">邮件正文</span>
-          <textarea placeholder="邮件编辑功能将在后续版本开放" readOnly />
-        </label>
-        <footer>
-          <span>请先添加邮箱账户</span>
-          <button type="submit" disabled>
-            <Icon name="paper-plane" size={16} /> 发送
-          </button>
-        </footer>
-      </form>
-    </section>
-  );
-}
-
 function StatusBar({
   appInfo,
   storageMessage,
@@ -289,6 +254,8 @@ function StatusBar({
 
 export default function App() {
   const [composeOpen, setComposeOpen] = useState(false);
+  const [composeDraftId, setComposeDraftId] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<MailView>("inbox");
   const [appInfo, setAppInfo] = useState<ApplicationInfo | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
   const [storageMessage, setStorageMessage] = useState("正在检查加密存储");
@@ -372,6 +339,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const report = () => {
+      void reportDesktopConnectivity(navigator.onLine).catch(() => {
+        /* Browser preview and unavailable desktop IPC remain usable. */
+      });
+    };
+    report();
+    window.addEventListener("online", report);
+    window.addEventListener("offline", report);
+    return () => {
+      window.removeEventListener("online", report);
+      window.removeEventListener("offline", report);
+    };
+  }, []);
+
+  useEffect(() => {
     const openCompose = (event: KeyboardEvent) => {
       if (oauthDialogOpen) return;
       if (event.key.toLowerCase() === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -383,6 +365,7 @@ export default function App() {
           return;
         }
         event.preventDefault();
+        setComposeDraftId(null);
         setComposeOpen(true);
       }
     };
@@ -392,13 +375,32 @@ export default function App() {
 
   const closeCompose = () => {
     setComposeOpen(false);
+    setComposeDraftId(null);
     composeButtonRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  };
+
+  const openNewCompose = () => {
+    setComposeDraftId(null);
+    setComposeOpen(true);
+  };
+
+  const openDraft = (draftId: string) => {
+    setComposeDraftId(draftId);
+    setComposeOpen(true);
+  };
+
+  const replyToMessage = (messageId: string) => {
+    void createLocalReplyDraft(messageId)
+      .then((draft) => {
+        setComposeDraftId(draft.id);
+        setComposeOpen(true);
+      })
+      .catch(() => setSyncMessage("无法创建回复草稿，请稍后重试"));
   };
 
   const openOAuthDialog = useCallback(
     (account: ConnectedAccountSummary | null, opener: HTMLButtonElement) => {
       oauthDialogOpenerRef.current = opener;
-      setComposeOpen(false);
       setReconnectAccount(account);
       if (account?.provider === "qq" || account?.provider === "netease") {
         setAuthorizationCodeProvider(account.provider);
@@ -439,17 +441,34 @@ export default function App() {
       <div className="app-content" ref={composeButtonRef}>
         <Sidebar
           accounts={connectedAccounts}
+          activeView={activeView}
           onAddAccount={openOAuthDialog}
-          onCompose={() => setComposeOpen(true)}
+          onCompose={openNewCompose}
+          onViewChange={setActiveView}
         />
-        <MailWorkspace
-          accounts={connectedAccounts}
-          onAddAccount={(opener) => openOAuthDialog(null, opener)}
-          onSync={() =>
-            setSyncMessage(connectedAccounts.length > 0 ? "正在请求邮箱同步" : "尚无可同步账户")
-          }
-        />
-        {composeOpen && <ComposePanel onClose={closeCompose} />}
+        {activeView === "inbox" ? (
+          <MailWorkspace
+            accounts={connectedAccounts}
+            onAddAccount={(opener) => openOAuthDialog(null, opener)}
+            onReply={replyToMessage}
+            onSync={() =>
+              setSyncMessage(connectedAccounts.length > 0 ? "正在请求邮箱同步" : "尚无可同步账户")
+            }
+          />
+        ) : activeView === "drafts" ? (
+          <DraftsView accounts={connectedAccounts} onOpenDraft={openDraft} />
+        ) : (
+          <SentView accounts={connectedAccounts} onOpenDraft={openDraft} />
+        )}
+        {composeOpen && (
+          <ComposePanel
+            key={composeDraftId ?? "new-message"}
+            accounts={connectedAccounts}
+            draftId={composeDraftId}
+            onClose={closeCompose}
+            onSent={() => setActiveView("sent")}
+          />
+        )}
         {oauthDialogOpen && (
           <OAuthOnboardingDialog
             reconnectAccount={reconnectAccount}

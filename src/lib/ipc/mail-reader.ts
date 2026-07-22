@@ -14,7 +14,7 @@ import {
   type ReaderAttachmentV1,
   type RemoteImageResultV1,
 } from "./bindings";
-import { isRecord } from "./decode";
+import { isNullableString, isRecord, isUint32, isUnsignedIntegerString, isUuid } from "./decode";
 
 export type {
   AssignReadStateResultV1,
@@ -27,29 +27,9 @@ export type {
 
 const addressRoles = new Set<AddressRole>(["from", "sender", "to", "cc", "bcc", "reply_to"]);
 const messageDirections = new Set<MessageDirection>(["incoming", "outgoing"]);
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const unsignedIntegerPattern = /^(0|[1-9][0-9]*)$/u;
 const remoteImageDataUrlPattern = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/u;
 const remoteImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const maxRemoteImageDataUrlLength = 2_800_000;
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function isUuid(value: unknown): value is string {
-  return typeof value === "string" && uuidPattern.test(value);
-}
-
-function isUnsignedIntegerString(value: unknown): value is string {
-  return typeof value === "string" && unsignedIntegerPattern.test(value);
-}
-
-function isUint32(value: unknown): value is number {
-  return (
-    typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 4_294_967_295
-  );
-}
 
 function decodeMessageSummary(value: unknown): InboxMessageSummaryV1 {
   if (!isRecord(value)) {
