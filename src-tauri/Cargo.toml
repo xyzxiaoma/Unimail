@@ -6,6 +6,7 @@ authors = ["xyzxiaoma"]
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 
 [lib]
 name = "unimail_lib"

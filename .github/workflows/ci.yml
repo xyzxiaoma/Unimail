@@ -14,6 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  security-audit:
+    name: 安全与依赖策略
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - run: npm ci
+      - run: npm run check:security
+      - run: npm audit --omit=dev
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo audit
+      - run: cargo deny check --warn unmaintained
+
   validate-and-build:
     name: 校验并构建 (${{ matrix.os }})
     strategy:
@@ -76,6 +98,9 @@ jobs:
       - name: 校验变更路径与发布说明
         run: npm run check:changes
 
+      - name: 校验安全策略
+        run: npm run check:security
+
       - name: 校验前端格式
         run: npm run format:check
 
@@ -102,6 +127,12 @@ jobs:
 
       - name: 运行 unimail-storage 测试
         run: cargo test -p unimail-storage
+
+      - name: 验证 macOS 所有者专用存储权限
+        if: runner.os == 'macOS'
+        run: |
+          cargo test -p unimail-storage --lib database::tests::unix_profile_storage_permissions_are_enforced_end_to_end -- --exact
+          cargo test -p unimail-storage --lib repository::tests::unix_attachment_storage_permissions_are_enforced_end_to_end -- --exact
 
       - name: 运行 unimail-application 测试
         run: cargo test -p unimail-application

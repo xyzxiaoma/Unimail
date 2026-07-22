@@ -19,8 +19,10 @@
     "check:release-note": "node scripts/check-release-note.mjs",
     "check:paths": "node scripts/check-changed-paths.mjs",
     "check:changes": "npm run check:paths && npm run check:release-note",
+    "check:security": "node scripts/check-security.mjs",
+    "check:security:self-test": "node scripts/check-security.mjs --self-test",
     "check:release-tag": "node scripts/check-release-tag.mjs",
-    "ci:validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:bindings && cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace",
+    "ci:validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:bindings && npm run check:security && cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace",
     "tauri": "tauri"
   },
   "dependencies": {
