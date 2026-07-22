@@ -188,10 +188,13 @@ Completed locally on Windows:
 - Native Windows Tauri production packaging succeeded and produced
   `target/release/bundle/nsis/Unimail_0.1.0_x64-setup.exe`.
 
-Still required before archive:
+Archive gate satisfied:
 
-- Commit and push the native-startup regression fix, then require the new Windows/macOS workflow run
-  to pass the packaged-executable smoke step before archive.
+- GitHub Actions run `29911094224` passed the security audit, all Windows/macOS validation and tests,
+  both native package builds, both packaged-executable startup smoke steps, and unsigned artifact
+  uploads.
+- Local Windows acceptance confirmed the “安全与诊断” modal opens, contains only the approved
+  privacy-safe fields, closes correctly, and leaves the native application process healthy.
 - Keep GitHub Release publication out of this task; release remains tag-only and separately gated.
 
 ## Native Startup Regression — 2026-07-22
