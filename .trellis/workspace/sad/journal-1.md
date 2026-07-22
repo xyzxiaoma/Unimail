@@ -363,3 +363,37 @@ Updated backend and frontend Trellis specs from the implemented V1 codebase, ver
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Prepare and verify v0.1.0 release dry run
+
+**Date**: 2026-07-22
+**Task**: Prepare and verify v0.1.0 release dry run
+**Branch**: `main`
+
+### Summary
+
+Prepared the exact Simplified Chinese v0.1.0 changelog section, passed local release contract checks, dispatched GitHub Actions dry run 29930204222, verified Windows NSIS, macOS Universal DMG, read-only assembly, three retained artifacts, skipped publisher, and zero GitHub Releases; recorded the remaining owner-controlled signing and tag gates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `778cea4` | (see git log) |
+| `f33285c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
