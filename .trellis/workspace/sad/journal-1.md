@@ -293,3 +293,40 @@ Implemented durable local drafts, plain-text compose and reply, explicit offline
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 完成安全加固与原生启动验收
+
+**Date**: 2026-07-22
+**Task**: 完成安全加固与原生启动验收
+**Branch**: `main`
+
+### Summary
+
+修复 rustls provider 未初始化导致的原生启动崩溃，加入 Windows/macOS 打包后启动冒烟，完成安全诊断界面验收、跨平台 CI 验证并归档 security-hardening 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e929183` | (see git log) |
+| `e52e159` | (see git log) |
+| `766abaa` | (see git log) |
+| `61ce6f4` | (see git log) |
+| `45629f5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
