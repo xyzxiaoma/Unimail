@@ -16,7 +16,7 @@ implemented integrations.
 | [Directory Structure](./directory-structure.md) | Workspace ownership and dependency direction | Foundation established |
 | [Database Guidelines](./database-guidelines.md) | SQLCipher, V1-V4 migrations, repositories, CJK FTS, outbound attempts, attachment cleanup, and owner-only sensitive files | Security storage policy established |
 | [Error Handling](./error-handling.md) | Safe application, storage, reader, compose/send, search, attachment, and privacy-diagnostic IPC contracts | Security diagnostics IPC established |
-| [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, security/dependency/native-startup gates, forbidden patterns | Security and native startup gates established |
+| [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, security/dependency/native-startup/release gates, forbidden patterns | Verified direct-download release gates established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
 | [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, Gmail/Graph OAuth and APIs, cursor safety, MIME budgets, conformance, and send ambiguity | Gmail and Outlook adapters established |
 | [Sync and Offline Guidelines](./sync-offline-guidelines.md) | Durable sync orchestration, read intent generations, retry/cancellation, and offline send review | Sync core established |

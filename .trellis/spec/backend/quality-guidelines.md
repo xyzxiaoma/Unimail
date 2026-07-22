@@ -220,3 +220,92 @@ ignore = ["*"]
 unmaintained = "all"
 ignore = []
 ```
+
+## Scenario: verified direct-download release transaction
+
+### 1. Scope / Trigger
+
+Apply whenever `.github/workflows/release.yml`, application versions, Tauri bundle targets,
+release scripts, signing Secrets, release notes, native-startup paths, or public Release assets
+change. V1 is direct-download-only; updater activation is a separate reviewed task.
+
+### 2. Signatures
+
+```text
+npm run check:release
+npm run check:release-tag -- vX.Y.Z
+node scripts/release-contract.mjs stage --platform <windows|macos> ...
+node scripts/release-contract.mjs assemble --input-dir <dir> --output-dir <dir> ...
+node scripts/release-contract.mjs verify-payload --payload-dir <dir> ...
+pwsh -File scripts/check-native-startup.ps1 -TargetRoot <release-root>
+```
+
+### 3. Contracts
+
+- Tags are exactly `vX.Y.Z`; package, Cargo workspace, Tauri, and an exact nonempty
+  `CHANGELOG.zh-CN.md` version section must agree.
+- Windows produces one x86_64 NSIS installer with `platformSigning=unsigned|authenticode`.
+- macOS produces one Universal DMG with `platformSigning=adhoc|developer-id`;
+  `developer-id` is valid only with `notarized=true`.
+- Per-platform provenance schema 1 includes version, tag, 40-hex commit, platform,
+  architecture, installer kind/file, signing state, optional verified public identity,
+  notarization state, and `nativeStartupPassed=true`.
+- `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` are an all-or-none set.
+  Apple certificate, identity, Apple ID, app password, and team ID are also all-or-none.
+- Ordinary pushes have `contents: read` and produce only 14-day artifacts. A
+  `workflow_dispatch` run assembles a payload but cannot publish. Only the tag-only
+  publisher in the protected `release` Environment receives `contents: write`.
+- The public set is exactly two installers, `SHA256SUMS`,
+  `release-provenance.json`, and `release-notes.zh-CN.md`.
+- Stable status is derived only when Windows Authenticode and macOS Developer ID plus
+  notarization all verify. Otherwise the Release is a pre-release with a Chinese warning.
+- V1 rejects `latest.json`, `.sig`, updater bundles, updater plugin/capability/config,
+  and any claimed automatic-update path.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Malformed tag, version drift, missing/placeholder Chinese notes | Fail before native build/publication |
+| All platform Secrets absent | Produce accurately labeled unsigned/ad-hoc candidate |
+| Any platform Secret set partial | Fail with missing variable names only |
+| Complete signing set but signature/identity/notarization verification fails | Fail; never downgrade the claim |
+| Missing/duplicate platform, installer, or provenance | Assembly fails |
+| Tag/commit drift or tampered size/hash | Verification/publisher fails |
+| Either platform is not production-ready | `prerelease=true` |
+| Unexpected or updater asset appears | Assembly/publisher fails |
+| Existing public Release or draft for another commit | Publisher refuses replacement |
+
+### 5. Good / Base / Bad Cases
+
+- Good: both production identities verify, the macOS DMG is notarized/stapled, all assets
+  hash correctly, protected approval occurs, and one stable Release is published.
+- Base: no signing Secrets; Windows unsigned and macOS ad-hoc packages pass startup,
+  produce a complete payload, and publish only as an explicitly warned pre-release.
+- Bad: a matrix build independently creates Releases, a partial Secret set silently falls
+  back, a filename is trusted instead of provenance, or `latest.json` is generated without
+  a deliberately configured updater key.
+
+### 6. Tests Required
+
+- `npm run check:release`: fictional good/base/bad manifests, note extraction, partial
+  Secrets, missing platforms, tamper rejection, stable/pre-release derivation, action pins,
+  publisher permissions, and updater-disabled assertions.
+- `npm run check:release-tag -- vX.Y.Z`: exact repository version and Chinese section.
+- Native Actions dry run: one NSIS, one Universal DMG, startup smoke, signing-state
+  verification, checksum/provenance generation, and no GitHub Release.
+- Tag publication is not an implementation test. Run it only after owner approval and a
+  protected `release` Environment are ready.
+
+### 7. Wrong vs Correct
+
+```yaml
+# Wrong: native jobs race to publish and infer trust from a name.
+- run: gh release create "$TAG" "*-signed.exe"
+
+# Correct: read-only native jobs emit verified provenance; one protected publisher
+# consumes the exact assembled payload after all checks and owner approval.
+permissions:
+  contents: read
+environment: release
+```
