@@ -153,6 +153,71 @@ const status = (await storageStatus()) as StorageStatus;
 const status = decodeStorageStatus(await storageStatus());
 ```
 
+## Mandatory Seven-Section Scenario: unified Inbox and secure reader IPC
+
+### 1. Scope / Trigger
+
+Apply to Inbox page/detail/read/image/link commands, generated reader DTOs, runtime decoders, and
+`MailWorkspace` / `SafeHtmlMessage` consumers.
+
+### 2. Signature and Flow
+
+```text
+SQLCipher repository -> Rust reader DTO -> Tauri Promise<unknown>
+  -> src/lib/ipc/mail-reader.ts decoder -> React Query / reader UI
+```
+
+Generated functions are `listInboxMessages`, `getMessageDetail`, `assignMessageReadState`,
+`fetchMessageRemoteImage`, and `openConfirmedExternalUrl`. Components never import raw `invoke`.
+
+### 3. Contract
+
+- Inbox requests carry `accountId|null`, `unreadOnly`, opaque `cursor|null`, and bounded `limit`.
+- Summary timestamps and generations are unsigned decimal strings so JavaScript does not lose i64/u64
+  precision. UUIDs, enums, nullable strings, arrays, and u32 versions are validated exactly once.
+- Remote image results accept only `image/png|jpeg|gif|webp` and a matching bounded base64 `data:` URL.
+- React Query owns cached pages/details and optimistic read state. UI-only selection, filters, external
+  confirmation, and current-message image approval remain local state.
+- Rejected commands never become fabricated success objects and unverified error payloads are not shown.
+
+### 4. Runtime Validation and Errors
+
+| Runtime value | Behavior |
+| --- | --- |
+| Invalid UUID/enum/string timestamp/u32/nullability | Throw `TypeError` |
+| Malformed page item, address, or attachment | Reject the whole payload |
+| Remote HTTP URL or mismatched media/data type returned as image | Throw `TypeError` |
+| Page fetch failure after earlier pages | Keep existing rows and show bottom retry |
+| Detail/read/image/link rejection | Show fixed generic Chinese state; do not render payload text |
+
+### 5. Good / Base / Bad Cases
+
+- Good: two equal-time messages retain backend order across opaque pages and are deduplicated by ID.
+- Base: browser preview or offline provider state still renders decoded cached mail when local IPC works.
+- Bad: `as MessageDetailV1`, parsing the cursor in React, placing bodies in list DTOs, or assigning a
+  remote URL directly to `<img src>`.
+
+### 6. Tests Required
+
+- Decoder tables cover valid and malformed pages, details, generations, and image data URLs.
+- Component tests cover automatic single-flight pagination, retained rows, J/K timer cancellation,
+  800 ms commit, external-link cancel/confirm/failure, and image approval reset/stale completion.
+- Malicious HTML fixtures prove scripts/forms/SVG/frames/styles/dangerous schemes and original remote
+  URLs are absent from the sandbox document.
+- Run format, lint, typecheck, all Vitest tests, build, binding drift, and changed-release-note checks.
+
+### 7. Wrong vs Correct
+
+```tsx
+// Wrong: bypasses both the decoder and remote-content boundary.
+const detail = (await invoke("get_message_detail")) as MessageDetailV1;
+return <div dangerouslySetInnerHTML={{ __html: detail.htmlBody ?? "" }} />;
+
+// Correct: decode once, sanitize, and render inside an inert sandbox.
+const detail = await getMailMessageDetail(messageId);
+return <SafeHtmlMessage messageId={messageId} html={detail.htmlBody ?? ""} />;
+```
+
 ## Forbidden Patterns
 
 - `any` at application or IPC boundaries.

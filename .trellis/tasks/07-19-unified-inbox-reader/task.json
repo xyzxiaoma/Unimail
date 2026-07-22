@@ -3,7 +3,7 @@
   "name": "unified-inbox-reader",
   "title": "Unified Inbox and Reader",
   "description": "Implement the three-pane unified inbox, message reader, offline states, and secure HTML rendering.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -42,15 +42,22 @@ beside the hook.
 
 ## Data Fetching
 
-React Query, SWR, and any server-state cache are not installed or established. The current
-asynchronous reads are the typed `getApplicationInfo()` and `getStorageStatus()` IPC facades called
-from effects. Future mail synchronization must choose and document its cache/refresh contract in
-the implementing task; do not assume React Query conventions now.
+TanStack Query is established only for IPC-backed Inbox pages, message details, and read mutations.
+Query keys include account scope/unread state or stable local message ID. Infinite pages use opaque
+backend cursors and retain earlier pages when loading more fails. Optimistic read changes snapshot the
+matching query key and roll back only that mutation on command failure.
+
+TanStack Virtual is established for the center message list. Intersection and J/K near-end loading
+must share a synchronous `useRef` single-flight gate because two callbacks can fire before React
+publishes `isFetchingNextPage=true`.
+
+Timers, window listeners, observers, and stale async image work require cleanup. The automatic read
+timer is keyed by current selection and fires only after 800 ms of stable unread selection.
 
 ## Forbidden Patterns
 
 - Calling raw Tauri `invoke` from a hook or component.
 - Casting an IPC result to the desired DTO instead of using a boundary decoder.
 - Omitting effect cleanup for listeners, timers, subscriptions, or stale async work.
-- Adding global-store or query-library dependencies for a single local interaction.
+- Adding another query/global-store library when the established Query/Virtual boundary is sufficient.
 - Naming a normal helper `use...` when it does not call hooks.

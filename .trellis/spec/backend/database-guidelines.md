@@ -32,6 +32,8 @@ pub trait StorageRepository: Send + Sync {
         -> RepositoryResult<DeleteAccountResult>;
     fn commit_sync_batch(&self, input: SyncBatchInput)
         -> RepositoryResult<SyncBatchResult>;
+    fn list_inbox_messages(&self, input: &InboxListInput)
+        -> RepositoryResult<MessagePage>;
     fn health(&self) -> RepositoryResult<StorageStatus>;
 }
 ```
@@ -86,6 +88,10 @@ the application database.
 - Attachment cache keys are single normal path components. Live keys are unique, queued keys are
   cancelled atomically when safely reused, and keys protected by an account-cleanup plan cannot
   be reused.
+- `list_inbox_messages` is one repository query over Inbox mailboxes and enabled, non-deleting
+  accounts. Optional account/unread filters compose with the stable keyset
+  `(received_at_ms, message_id)`, ordered descending. Sent rows, disabled accounts, and deleting
+  accounts never appear; the Tauri or React layer must not merge per-account pages itself.
 
 ### 4. Validation & Error Matrix
 
@@ -123,7 +129,8 @@ Internal SQL, keyring, path, and OS errors are never returned verbatim.
   secret-column scan, V1 fixture preservation, foreign keys, uniqueness, cascade, and schema
   version.
 - Repository: provider-message idempotency, deterministic keyset paging, cross-account rejection,
-  mailbox-scoped identity, replay/Gone/reappearance, FTS update/rebuild/direct row count after
+  unified Inbox ordering/filtering/equal-time ties/account visibility, mailbox-scoped identity,
+  replay/Gone/reappearance, FTS update/rebuild/direct row count after
   cascade, draft revision conflict, desired-read generations, trigger consumption/follow-up,
   cancellation fencing, account-wide running-lease exclusion, and mid-batch cursor/data rollback.
 - Cleanup: credential failure, attachment deletion failure, restart recovery, queued-key reuse,

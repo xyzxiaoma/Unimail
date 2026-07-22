@@ -52,6 +52,18 @@ library or multilingual contract is established.
 Use user-facing language, not backend terms. Copy or behavior changes must update
 `CHANGELOG.zh-CN.md` under `未发布`.
 
+## Untrusted Mail Content
+
+- Sanitize stored HTML on every render with a project allowlist, then place it in `iframe srcDoc`
+  with `sandbox=""` and embedded `default-src 'none'` CSP. Never use `dangerouslySetInnerHTML` in the
+  trusted application document.
+- Remove active link targets and expose HTTP(S) links as trusted React buttons. Confirmation must show
+  the normalized host and complete URL before the backend opener is called.
+- Replace remote images with placeholders by default. A current-message-only action may request at
+  most 12 validated backend-proxied images; changing the keyed message component resets approval.
+- Message rows remain native `button[role=option]` controls. J/K ignores editable targets, and automatic
+  pagination uses one synchronous single-flight guard shared by scroll, keyboard, and retry entry points.
+
 ## Common Mistakes
 
 - Using clickable `div`/`span` elements instead of native buttons or links.

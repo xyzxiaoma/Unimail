@@ -229,6 +229,83 @@ fn storage_status() -> Result<StorageStatus, String> {
 repository.health().map_err(StorageCommandError::from)
 ```
 
+## Scenario: Unified Inbox and secure reader IPC
+
+### 1. Scope / Trigger
+
+Apply when changing Inbox paging, message detail/read commands, remote-image delivery, external-link
+opening, generated bindings, or reader-facing storage errors.
+
+### 2. Signatures
+
+```rust
+list_inbox_messages(InboxPageRequestV1) -> Result<InboxPageV1, StorageCommandError>
+get_message_detail(message_id: String) -> Result<MessageDetailV1, StorageCommandError>
+assign_message_read_state(message_id: String, read: bool)
+    -> Result<AssignReadStateResultV1, StorageCommandError>
+fetch_message_remote_image(message_id: String, url: String)
+    -> Result<RemoteImageResultV1, StorageCommandError>
+open_confirmed_external_url(url: String) -> Result<(), StorageCommandError>
+```
+
+Repository calls are synchronous and run through `spawn_blocking`; no SQL connection or transaction
+crosses `.await`.
+
+### 3. Contracts
+
+- Inbox requests accept an optional local account UUID, unread flag, opaque `v1:` cursor, and limit
+  `1..=100`. List DTOs never contain message bodies.
+- Detail returns normalized cached bodies, addresses, and attachment metadata by local message UUID.
+- Read assignment commits the durable local generation first, then asynchronously drains the owning
+  provider coordinator. Provider acknowledgement does not block the command.
+- Remote images are HTTPS-only and must occur in the selected message HTML. Resolve every hop, reject
+  any non-public answer, pin the accepted address, disable automatic redirects, send no credentials,
+  and cap count, bytes, dimensions, media type, redirects, and time. Return only an allowlisted local
+  `data:` image.
+- External links accept credential-free HTTP(S) URLs only and open through `open::that_detached`; no
+  general shell capability is granted.
+- Commands never log or return bodies, addresses, URLs, SQL, paths, provider revisions, or raw errors.
+
+### 4. Validation & Error Matrix
+
+| Condition | Public result |
+| --- | --- |
+| Malformed UUID/cursor/limit/URL or image policy rejection | `invalid_data` |
+| Missing message/account | `not_found` |
+| Repository busy/failure | Existing fixed `StorageCommandError` mapping |
+| DNS/HTTP/opener failure | Fixed `internal`; no network or OS detail |
+| Redirect to HTTP/private/loopback/credentialed destination | `invalid_data`; do not follow |
+| Image type, signature, size, or dimensions exceed allowlist | `invalid_data`; return no bytes |
+
+### 5. Good / Base / Bad Cases
+
+- Good: an unread cached message becomes locally read, returns its generation, and provider draining
+  continues asynchronously.
+- Base: cached list/detail remain usable without provider connectivity; remote images stay blocked.
+- Bad: returning raw HTML directly to the main DOM, letting the WebView fetch a message URL, accepting
+  one public and one private DNS answer, following redirects automatically, or returning `error.to_string()`.
+
+### 6. Tests Required
+
+- Cursor/limit/UUID tests plus unified ordering, account/unread filters, equal-time ties, and deletion
+  visibility in real SQLCipher storage.
+- Binding exporter and frontend decoder tests for every DTO; malformed payloads must throw `TypeError`.
+- Remote-image fake resolver/transport tests for public pinning, private DNS, redirect revalidation,
+  exact headers, media/signature match, byte/dimension/count caps, and no request before approval.
+- External-link tests prove cancel is a no-op, confirmed URLs are exact, and failures stay sanitized.
+- Run binding drift, frontend checks, Rust format/Clippy/workspace tests, and change-path checks.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: grants message HTML a direct network path.
+webview.navigate(remote_image_url)?;
+
+// Correct: re-read the local message, verify its manifest, pin public DNS, and return local bytes.
+let html = repository.get_message(message_id)?.and_then(|detail| detail.html_body)?;
+remote_image::fetch_remote_image(&html, requested_url).await
+```
+
 ## Common Mistakes
 
 - Adding a field only to a handwritten frontend interface instead of the Rust DTO.

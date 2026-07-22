@@ -67,6 +67,9 @@ transaction is held across `.await`.
 - Local read changes update effective state and increment one durable intent generation in the
   same transaction. Remote sync observations update provider state/revision but never clear the
   intent. Only the claimed generation's `ReadStateAck` may complete it.
+- Reader-originated read assignment returns after the durable generation commits, resolves the
+  message's owning account/provider locally, and spawns exactly that provider coordinator's
+  `run_one_read_mutation`. It never waits for provider acknowledgement or routes by frontend input.
 - Offline send saves the latest draft and revision-bound `offline` review marker atomically. On
   reconnect/restart, code may only query confirmation requirements. Neither `SyncCoordinator` nor
   `ExplicitSendGate` can call `MailProvider::send`.
