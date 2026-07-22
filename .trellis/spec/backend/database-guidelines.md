@@ -171,3 +171,83 @@ let status = repository.health()?; // Safe metadata only.
 - Provider cursor JSON is opaque storage owned by the provider/sync layer; SQL row mapping remains
   private to `unimail-storage`.
 - Local `.db`, `.sqlite*`, mail, attachment-cache, credential, and lock artifacts never enter Git.
+
+## Scenario: V4 local search and received-attachment transfer recovery
+
+### 1. Scope / Trigger
+
+Apply this scenario when changing schema V4, `email_fts`, search paging, received-attachment
+source resolution, verification metadata, transfer finalization, or restart cleanup.
+
+### 2. Signatures
+
+```rust
+StorageRepository::search_inbox_messages(&SearchMessagesInput) -> RepositoryResult<SearchMessagePage>
+StorageRepository::rebuild_search_index() -> RepositoryResult<()>
+StorageRepository::get_attachment_download_source(AttachmentId)
+    -> RepositoryResult<Option<AttachmentDownloadSource>>
+StorageRepository::record_attachment_verification(AttachmentVerificationInput)
+    -> RepositoryResult<()>
+
+SqlCipherRepository::begin_attachment_transfer(OperationId, PathBuf, i64)
+    -> RepositoryResult<AttachmentTransfer>
+SqlCipherRepository::finish_attachment_transfer(&AttachmentTransfer) -> RepositoryResult<()>
+SqlCipherRepository::abort_attachment_transfer(&AttachmentTransfer) -> RepositoryResult<()>
+```
+
+V4 adds encrypted `search_index_state(singleton, document_version)` and
+`attachment_transfer_cleanup(operation_id, temporary_path, created_at_ms)` tables.
+
+### 3. Contracts
+
+- Raw user text never reaches FTS `MATCH`. The repository NFKC-normalizes bounded literal terms;
+  Latin/Unicode words and bounded CJK unigram/bigram/trigram tokens use the same projection path.
+- Search includes enabled, non-deleting Inbox rows only, supports account/unread scope, and orders by
+  rank, received time, then message ID. The opaque cursor is bound to query and scope.
+- Match context is plain text selected from the first subject/sender/body field containing a query
+  term; it must not fall back to an unrelated subject merely because it is non-empty.
+- Transfer creation proceeds only when destination metadata returns `NotFound`; existing files,
+  symlinks, invalid parents, and other metadata errors are rejected safely.
+- The cleanup ledger owns only generated regular files with the fixed partial-file prefix. Success
+  uses no-clobber finalization, removes the partial and ledger row, records size/checksum only, and
+  stores neither the chosen destination nor an ordinary private attachment copy.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Blank, oversized, malformed, or cursor-scope-mismatched search | `InvalidData` |
+| Existing/unsafe destination or finalization collision | `ConstraintViolation` |
+| Destination metadata fails for a reason other than `NotFound` | Safe `Internal`; do not create a transfer |
+| Transfer ledger insert fails | Delete the created partial and return a safe repository error |
+| Restart finds an owned regular partial | Delete only that file and clear its ledger row |
+| Restart sees missing, symlinked, directory, or unowned path | Never follow/delete it; return or retain safe cleanup state |
+
+### 5. Good / Base / Bad Cases
+
+- Good: an offline CJK body query returns a deterministic Inbox hit and body context.
+- Base: cancelling or failing a transfer leaves no final file; restart removes an owned partial.
+- Bad: pass query operators directly to `MATCH`, treat `PermissionDenied` as destination absence,
+  overwrite an existing file, or persist a user-selected destination/cache copy.
+
+### 6. Tests Required
+
+- Migration tests cover fresh/V1-to-V4/latest-to-latest preservation and forbidden secret columns.
+- Search tests cover subject/body/sender, literal operators, account/unread scope, stable pages,
+  cursor mismatch, rebuild equivalence, Unicode, and representative CJK.
+- Attachment tests cover eligible source resolution, checksum preservation, no-clobber save,
+  transfer-ledger rollback, hostile paths/symlinks, and restart cleanup.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: every metadata failure is interpreted as a free destination.
+if fs::symlink_metadata(&destination).is_ok() { return Err(collision()); }
+
+// Correct: only a real NotFound permits transfer creation.
+match fs::symlink_metadata(&destination) {
+    Ok(_) => return Err(collision()),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    Err(_) => return Err(internal()),
+}
+```

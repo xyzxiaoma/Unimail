@@ -14,10 +14,10 @@ store, React Query, and reusable custom hooks are not established yet.
 | Guide | Current scope | Status |
 | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | Current shell layout and feature-oriented growth direction | Foundation established |
-| [Component Guidelines](./component-guidelines.md) | Semantic components, accessibility, styling, and Chinese UI copy | Foundation established |
+| [Component Guidelines](./component-guidelines.md) | Semantic components, accessibility, search/attachment actions, styling, and Chinese UI copy | Attachments/search UI established |
 | [Hook Guidelines](./hook-guidelines.md) | Built-in hook usage and explicitly deferred data-fetching patterns | Foundation established |
 | [State Management](./state-management.md) | Component-local state and IPC-derived state | Foundation established |
-| [Type Safety](./type-safety.md) | Strict TypeScript plus application, storage, onboarding, reader, and compose/send IPC scenarios | Compose/send boundary established |
+| [Type Safety](./type-safety.md) | Strict TypeScript plus application, storage, onboarding, reader, compose/send, search, and attachment IPC scenarios | Attachments/search boundary established |
 | [Quality Guidelines](./quality-guidelines.md) | Formatting, linting, tests, builds, and forbidden patterns | Foundation established |
 
 ## Pre-Development Checklist

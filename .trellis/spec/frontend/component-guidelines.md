@@ -71,3 +71,12 @@ Use user-facing language, not backend terms. Copy or behavior changes must updat
 - Testing CSS selectors when a role/name assertion describes the user contract.
 - Adding a remote font or runtime asset URL to improve appearance.
 - Duplicating the same Chinese status or error wording across components.
+
+## Search and attachment actions
+
+- Search stays in the existing center pane, preserves account/unread scope, debounces ordinary
+  typing, uses opaque backend cursors, and opens results through the existing reader selection flow.
+- Received non-inline attachments use native buttons with filename, human-readable size, and an
+  independent save/progress/cancel/failure/retry state. Save-dialog cancellation is not an error.
+- Do not display or retain destination paths. A completed action confirms the save only; it must not
+  imply that Unimail retained an offline private copy.

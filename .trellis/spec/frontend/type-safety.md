@@ -439,3 +439,61 @@ setForm({ accountAddress, authorizationCode });
 await connectAuthorizationCodeAccount(provider, accountId, accountAddress, authorizationCode);
 setAuthorizationCode("");
 ```
+
+## Mandatory Seven-Section Scenario: local search and attachment download IPC
+
+### 1. Scope / Trigger
+
+Apply to search/attachment generated DTOs, `src/lib/ipc/mail-reader.ts`, and `MailWorkspace`.
+
+### 2. Signature and Flow
+
+```text
+SearchPageRequestV1 -> searchInboxMessages -> Promise<unknown> -> SearchPageV1 decoder -> list UI
+attachment ID -> begin/status/cancel -> Promise<unknown> -> snapshot decoder -> attachment action
+```
+
+### 3. Contract
+
+- Search requests contain `query`, `accountId|null`, `unreadOnly`, `cursor|null`, and bounded `limit`.
+- Search pages contain decoded Inbox summaries, plain-text `matchContext|null`, and
+  `nextCursor|null`; clearing a blank query exits search mode instead of invoking IPC.
+- Attachment snapshots accept only known states, UUIDs, unsigned decimal strings, nullable total,
+  and a fixed code/message/retryability envelope. No path-shaped field is part of the DTO.
+- The UI derives the newest snapshot from query data instead of synchronously mirroring polling data
+  into component state from an effect.
+
+### 4. Runtime Validation and Errors
+
+| Runtime value | Behavior |
+| --- | --- |
+| Malformed search hit/cursor/summary | Throw `TypeError`; reject the page |
+| Unknown attachment state/error or unsafe byte string | Throw `TypeError` |
+| Begin returns `null` | Treat as normal save-dialog cancellation |
+| Status query rejects | Keep the last safe snapshot and show generic Chinese failure copy |
+| Command rejection is not a validated fixed envelope | Never display its raw value |
+
+### 5. Good / Base / Bad Cases
+
+- Good: debounced scoped search reuses the reader and attachment polling displays safe progress.
+- Base: clearing search restores Inbox state; cancelling the chooser restores an idle attachment action.
+- Bad: cast generated `unknown`, display a filesystem path/raw rejection, or copy query data into state
+  synchronously inside `useEffect`.
+
+### 6. Tests Required
+
+- Decoder tables cover valid and malformed search pages, cursors, operation states, byte strings,
+  and fixed errors.
+- Component tests cover debounce/scope/clear/paging/result opening plus chooser cancellation,
+  progress, cancel, failure, retry, and independent attachments.
+- Run Prettier, ESLint, typecheck, Vitest, binding drift, production build, and changed-path checks.
+
+### 7. Wrong vs Correct
+
+```tsx
+// Wrong: duplicates server state and violates the effect rule.
+useEffect(() => { if (status.data) setOperation(status.data); }, [status.data]);
+
+// Correct: polling data is already the current server-state projection.
+const current = status.data ?? operation;
+```

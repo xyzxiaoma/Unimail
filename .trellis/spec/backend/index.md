@@ -14,8 +14,8 @@ implemented integrations.
 | Guide | Current scope | Status |
 | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | Workspace ownership and dependency direction | Foundation established |
-| [Database Guidelines](./database-guidelines.md) | SQLCipher, V1-V3 migrations, repositories, FTS, outbound attempts, and cleanup recovery | Compose/send storage established |
-| [Error Handling](./error-handling.md) | Safe application, storage, reader, and compose/send IPC contracts | Compose/send IPC established |
+| [Database Guidelines](./database-guidelines.md) | SQLCipher, V1-V4 migrations, repositories, CJK FTS, outbound attempts, and attachment cleanup recovery | Attachments/search storage established |
+| [Error Handling](./error-handling.md) | Safe application, storage, reader, compose/send, search, and attachment IPC contracts | Attachments/search IPC established |
 | [Quality Guidelines](./quality-guidelines.md) | Workspace lints, tests, generated bindings, forbidden patterns | Foundation established |
 | [Logging Guidelines](./logging-guidelines.md) | Current no-runtime-logger state and sensitive-data rules | Foundation established |
 | [Provider and MIME Guidelines](./provider-guidelines.md) | Provider/auth ports, Gmail/Graph OAuth and APIs, cursor safety, MIME budgets, conformance, and send ambiguity | Gmail and Outlook adapters established |

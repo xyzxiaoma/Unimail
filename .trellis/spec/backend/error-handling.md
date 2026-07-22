@@ -380,3 +380,67 @@ provider.find_sent(request, cancellation).await.map_err(map_safe_error)?;
 - Using `unwrap`/`expect` for a recoverable command failure.
 - Returning internal error strings that may contain paths, tokens, message content, or
   provider responses.
+
+## Scenario: local search and received-attachment download IPC
+
+### 1. Scope / Trigger
+
+Apply when changing search or attachment commands, DTOs, operation state, native save-dialog
+routing, generated bindings, or their safe public errors.
+
+### 2. Signatures
+
+```rust
+search_inbox_messages(SearchPageRequestV1) -> Result<SearchPageV1, StorageCommandError>
+begin_attachment_download(String) -> Result<Option<AttachmentDownloadSnapshotV1>, AttachmentDownloadCommandError>
+get_attachment_download_status(String) -> Result<AttachmentDownloadSnapshotV1, AttachmentDownloadCommandError>
+cancel_attachment_download(String) -> Result<AttachmentDownloadSnapshotV1, AttachmentDownloadCommandError>
+```
+
+### 3. Contracts
+
+- Search is repository-only and works without provider/network state. Requests carry literal query,
+  optional account, unread flag, opaque cursor, and limit `1..=100`.
+- The Rust-side native dialog owns the destination. `None` means chooser cancellation and creates no
+  operation; paths and bytes never enter IPC, frontend permissions, errors, or logs.
+- Attachment snapshots expose operation/attachment IDs, state, decimal-string byte counts, optional
+  total bytes, and one fixed safe error. Status polling is authoritative.
+- Duplicate active requests for one attachment return the active snapshot. If registry insertion
+  fails after transfer creation, abort the transfer before returning the registry error.
+
+### 4. Validation & Error Matrix
+
+| Condition | Public result |
+| --- | --- |
+| Invalid search request/cursor scope | fixed `invalid_data` storage error |
+| Save chooser cancelled | `Ok(None)`; no banner or operation |
+| Offline, unavailable account/provider, collision, oversize, write/checksum failure | matching fixed attachment code/message/retryability |
+| Invalid/unknown operation or attachment ID | fixed `attachment_not_found` |
+| Internal repository/provider/path detail exists | map to allowlisted code; never serialize detail |
+
+### 5. Good / Base / Bad Cases
+
+- Good: React receives only a queryable progress snapshot while Rust streams to a backend-owned file.
+- Base: a fast terminal operation is recovered by polling and remains bounded in the session registry.
+- Bad: return a selected path, provider error string, SQL error, query text, or complete attachment bytes.
+
+### 6. Tests Required
+
+- Core serialization tests assert exact camel/snake-case shapes, decimal strings, fixed messages,
+  retryability, and absence of path fields.
+- Tauri tests cover chooser cancellation, registry scope/cancellation, unknown operations, safe mapping,
+  provider routing, and cleanup when post-file operation setup fails.
+- Run binding drift, frontend decoder tests, strict Clippy, and workspace tests.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: a registry failure strands a ledger-owned partial file.
+let snapshot = operations.insert(operation_id, attachment_id, total, cancellation)?;
+
+// Correct: abort the already-created transfer before returning the safe error.
+let snapshot = match operations.insert(operation_id, attachment_id, total, cancellation) {
+    Ok(snapshot) => snapshot,
+    Err(error) => { let _ = repository.abort_attachment_transfer(&transfer); return Err(error); }
+};
+```
