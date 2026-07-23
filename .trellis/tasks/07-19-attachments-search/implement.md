@@ -175,5 +175,19 @@ Also run a Windows desktop smoke test when the environment permits:
 - Focused frontend checks pass with 19 tests across `MailWorkspace` and reader IPC, plus strict ESLint
   and TypeScript checks. Existing focused SQLCipher search/cleanup and application streaming tests
   also pass.
-- The child remains `in_progress` until the owner runs the native Windows checklist with controlled
-  test mail and confirms the user-visible filesystem/search observations.
+- Final implementation review found that the frontend expected `cancel_attachment_download` to
+  return an authoritative terminal snapshot, while the Rust registry previously returned the stale
+  `downloading` state. It also allowed an old terminal callback to remove the active mapping for a
+  newer retry of the same attachment.
+- Cancellation now atomically publishes a sticky `cancelled` snapshot, releases only its own active
+  mapping, and prevents the old background transfer from claiming final publication. A transfer
+  that already atomically claimed finalization keeps completion/failure ownership instead of
+  pretending a late cancel succeeded.
+- New Rust regressions cover immediate cancellation, retry mapping isolation, sticky cancellation,
+  and the cancel-versus-finalization race. The full `npm run ci:validate` gate passed with 113
+  frontend tests and all workspace Rust tests; production frontend build, changed-path/release-note
+  checks, Windows NSIS packaging, and packaged native startup smoke also passed on 2026-07-23.
+- No real mailbox, message, search term, attachment, credential, or selected local path was accessed
+  during automated verification. The owner checklist remains available for optional live-provider
+  confirmation. Deterministic cross-layer coverage plus the real Windows package/startup evidence
+  completes the implementation acceptance without requiring private owner data.

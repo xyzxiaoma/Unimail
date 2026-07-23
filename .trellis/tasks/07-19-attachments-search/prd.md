@@ -58,17 +58,22 @@ Complete the V1 attachment-download and local-search experience so users can saf
 
 ## Acceptance Criteria
 
-- [ ] Clicking a received attachment opens a native save chooser with a sanitized suggested filename, and cancelling leaves no file or error banner.
-- [ ] A successful download streams through the backend, respects the configured size limit, verifies its byte count/checksum, and produces one complete file at the confirmed destination without exposing its path to React.
-- [ ] Hostile filenames, traversal attempts, duplicate destinations, failed transfers, cancellation, and application restart leave no unsafe or misleading partial output.
-- [ ] Download progress and typed failure/retry states are visible independently for each attachment.
-- [ ] Account removal and restart cleanup remove every application-owned attachment cache entry without touching files the user explicitly saved elsewhere.
-- [ ] Searching by subject, body text, sender name, or sender address returns local Inbox results while all provider/network access is unavailable.
-- [ ] Search honors the selected all-account or single-account scope and excludes deleting/disabled accounts and non-Inbox projections.
-- [ ] Results are paged and deterministic, show safe snippets, and opening one renders the existing reader detail.
-- [ ] Quotes, FTS operators, punctuation, malformed input, Unicode, and representative CJK terms are handled safely and predictably.
-- [ ] Search-index maintenance remains transactional with message synchronization and the explicit rebuild path restores equivalent results.
-- [ ] Frontend tests, Rust tests, strict lint/type checks, generated-binding checks, build checks, path checks, and release-note checks pass.
+- [x] Clicking a received attachment opens a native save chooser with a sanitized suggested filename, and cancelling leaves no file or error banner.
+- [x] A successful download streams through the backend, respects the configured size limit, verifies its byte count/checksum, and produces one complete file at the confirmed destination without exposing its path to React.
+- [x] Hostile filenames, traversal attempts, duplicate destinations, failed transfers, cancellation, and application restart leave no unsafe or misleading partial output.
+- [x] Download progress and typed failure/retry states are visible independently for each attachment.
+- [x] Account removal and restart cleanup remove every application-owned attachment cache entry without touching files the user explicitly saved elsewhere.
+- [x] Searching by subject, body text, sender name, or sender address returns local Inbox results while all provider/network access is unavailable.
+- [x] Search honors the selected all-account or single-account scope and excludes deleting/disabled accounts and non-Inbox projections.
+- [x] Results are paged and deterministic, show safe snippets, and opening one renders the existing reader detail.
+- [x] Quotes, FTS operators, punctuation, malformed input, Unicode, and representative CJK terms are handled safely and predictably.
+- [x] Search-index maintenance remains transactional with message synchronization and the explicit rebuild path restores equivalent results.
+- [x] Frontend tests, Rust tests, strict lint/type checks, generated-binding checks, build checks, path checks, and release-note checks pass.
+
+Completion evidence uses fictional deterministic provider/storage/UI fixtures plus a real Windows
+NSIS package build and packaged-executable startup smoke. No real mailbox, attachment, query,
+credential, or selected path was read. The separate owner checklist remains available as optional
+live-provider confidence testing and is not used to weaken or replace the executable safety tests.
 
 ## Out of Scope
 
