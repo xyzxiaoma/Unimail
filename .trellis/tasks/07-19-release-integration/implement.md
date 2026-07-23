@@ -157,9 +157,10 @@ Also verify in Actions:
 
 ## Current Verification State
 
-- `CHANGELOG.zh-CN.md` now contains the exact `0.1.0 - 2026-07-22` Chinese version section, and
-  `npm run check:release-tag -- v0.1.0`, `npm run check:release`, and changed-path/release-note checks
-  pass locally.
+- `CHANGELOG.zh-CN.md` contains the exact `0.1.0 - 2026-07-23` Chinese version section, including the
+  attachment retry and cancelled-download fixes that ship in the installers. `npm run check:release`,
+  `npm run check:release-tag -- v0.1.0`, `npm run check:changes`, and `git diff --check` passed before
+  the tag was created.
 - GitHub Actions workflow-dispatch dry run
   [`29930204222`](https://github.com/xyzxiaoma/Unimail/actions/runs/29930204222) passed against commit
   `778cea488f3a82be5e1b9f5885da81ca50fadae0` without creating a tag or Release.
@@ -168,13 +169,24 @@ Also verify in Actions:
 - The run produced `release-candidate-windows-v0.1.0`, `release-candidate-macos-v0.1.0`, and
   `release-payload-v0.1.0-778cea488f3a82be5e1b9f5885da81ca50fadae0`; the GitHub Release count
   remained zero after completion.
-- The task remains `in_progress`: production Authenticode, Developer ID signing/notarization,
-  protected-environment approval, and the first real tag/publication stay owner-controlled and have
-  not been executed.
-- A 2026-07-22 public GitHub audit still shows zero tags and zero Releases. The public API cannot
-  confirm protected Environment rules, and this execution environment does not expose an approved
-  authenticated repository-administration API path.
-- The successful dry run reported Windows `unsigned` and macOS `adhoc`, so production signing
-  material was not active for that run. A real tag remains intentionally withheld until complete
-  Authenticode and Apple Developer ID/notarization Secrets are configured and the `release`
-  Environment has a required owner reviewer.
+- The authenticated repository configuration was verified before publication: the protected
+  `release` Environment requires reviewer `xyzxiaoma`, allows the owner to approve their own
+  deployment, and restricts deployment tags to `v*`. Repository and Environment signing Secrets
+  were empty by owner choice.
+- The owner explicitly approved an unsigned/ad-hoc `v0.1.0` test pre-release. Annotated tag `v0.1.0`
+  resolves to commit `34753b942d341d01599028a82b49618c4fafe8b4` and triggered Actions run
+  [`29973355984`](https://github.com/xyzxiaoma/Unimail/actions/runs/29973355984).
+- Run `29973355984` passed the release contract and dependency audit, Windows x86_64 NSIS build,
+  macOS Universal DMG build, native startup checks, read-only assembly, protected Environment
+  approval, and the single publisher job. The owner approval produced deployment `5565860156`.
+- Public Release [`v0.1.0`](https://github.com/xyzxiaoma/Unimail/releases/tag/v0.1.0) is non-draft and
+  `prerelease=true`, targets the exact tag commit, and contains exactly the Windows unsigned NSIS,
+  macOS Universal ad-hoc/non-notarized DMG, `SHA256SUMS`, `release-provenance.json`, and
+  `release-notes.zh-CN.md`.
+- All downloaded files covered by `SHA256SUMS` matched their published hashes. Consolidated provenance
+  records Windows `unsigned`, macOS `adhoc` with `notarized=false`, both native startup checks as
+  passed, `prerelease=true`, and `updaterEnabled=false`. The public asset set contains no updater
+  bundle, `.sig`, or `latest.json`.
+- Real Authenticode and Apple Developer ID/notarization execution remains deferred because the owner
+  has no production certificates. The tested fail-closed credential contracts remain ready for a
+  later production-signing acceptance run and do not change the status of this approved test release.

@@ -109,28 +109,34 @@ when updater signing is deliberately enabled.
 
 ## Acceptance Criteria
 
-- [ ] An ordinary `main` push produces temporary Windows/macOS artifacts and no GitHub Release.
-- [ ] A malformed/mismatched tag or missing Chinese version section fails before native publication.
-- [ ] Native build jobs have read-only permissions; only the final publisher has `contents: write`.
-- [ ] The verified asset set contains one Windows x86_64 NSIS installer and one macOS Universal DMG.
-- [ ] No platform signing Secrets produces accurately labeled unsigned/ad-hoc test assets.
-- [ ] Any partial Windows or Apple credential set fails early without printing secret values.
+- [x] An ordinary `main` push produces temporary Windows/macOS artifacts and no GitHub Release.
+- [x] A malformed/mismatched tag or missing Chinese version section fails before native publication.
+- [x] Native build jobs have read-only permissions; only the final publisher has `contents: write`.
+- [x] The verified asset set contains one Windows x86_64 NSIS installer and one macOS Universal DMG.
+- [x] No platform signing Secrets produces accurately labeled unsigned/ad-hoc test assets.
+- [x] Any partial Windows or Apple credential set fails early without printing secret values.
 - [ ] Complete Windows credentials produce an Authenticode-verified installer with recorded identity.
 - [ ] Complete Apple credentials produce a codesign-verified, notarized, stapled artifact; signed but
       unnotarized output cannot be reported as production-ready.
-- [ ] Any unsigned/ad-hoc platform makes the GitHub Release a pre-release with a Chinese warning;
+- [x] Any unsigned/ad-hoc platform makes the GitHub Release a pre-release with a Chinese warning;
       stable publication is impossible unless both platform signing states verify as production-ready.
-- [ ] The publisher requires both platforms, generates SHA-256 checksums and provenance, uses the exact
+- [x] The publisher requires both platforms, generates SHA-256 checksums and provenance, uses the exact
       Chinese changelog section, and publishes one Release only after verifying the draft asset set
       and receiving protected-environment approval.
-- [ ] Updater-disabled Releases contain no `latest.json`, updater bundle, or `.sig` masquerading as an
+- [x] Updater-disabled Releases contain no `latest.json`, updater bundle, or `.sig` masquerading as an
       update channel.
-- [ ] No updater plugin, capability, endpoint, key, prompt, or automatic download/install behavior is
+- [x] No updater plugin, capability, endpoint, key, prompt, or automatic download/install behavior is
       activated in the V1 application.
-- [ ] Release documentation lets the owner configure Secrets, prepare a version, run a dry check,
+- [x] Release documentation lets the owner configure Secrets, prepare a version, run a dry check,
       create the tag, recover a failed draft, and identify unsigned/ad-hoc artifacts.
-- [ ] Security, dependency, frontend/Rust, native startup, changed-path, release-note, and release
+- [x] Security, dependency, frontend/Rust, native startup, changed-path, release-note, and release
       workflow tests pass without committed credentials or signing material.
+
+Owner acceptance decision on 2026-07-23: real certificate-backed Authenticode and Apple Developer ID
+notarization execution is deferred because no production certificates are available. The owner
+explicitly approved completing this task with the fail-closed signing contracts and the verified
+unsigned/ad-hoc `v0.1.0` test pre-release; the two unchecked production-credential criteria remain a
+future operational acceptance item rather than a blocker for this direct-download test release.
 
 ## Out of Scope
 
