@@ -29,6 +29,7 @@ struct OperationEntry {
     state: AttachmentDownloadStateV1,
     error: Option<AttachmentDownloadCommandError>,
     cancellation: Arc<DesktopCancellation>,
+    finalizing: bool,
 }
 
 #[derive(Default)]
@@ -82,6 +83,7 @@ impl AttachmentOperationState {
                 state: AttachmentDownloadStateV1::Downloading,
                 error: None,
                 cancellation,
+                finalizing: false,
             },
         );
         snapshot(&registry, operation_id).ok_or_else(internal_error)
@@ -99,11 +101,44 @@ impl AttachmentOperationState {
         &self,
         operation_id: OperationId,
     ) -> Result<Option<AttachmentDownloadSnapshotV1>, AttachmentDownloadCommandError> {
-        let registry = self.lock()?;
-        if let Some(entry) = registry.operations.get(&operation_id) {
-            entry.cancellation.cancel();
+        let mut registry = self.lock()?;
+        let cancelled_attachment = registry
+            .operations
+            .get_mut(&operation_id)
+            .and_then(|entry| {
+                if entry.state == AttachmentDownloadStateV1::Downloading && !entry.finalizing {
+                    entry.cancellation.cancel();
+                    entry.state = AttachmentDownloadStateV1::Cancelled;
+                    entry.error = None;
+                    Some(entry.attachment_id)
+                } else {
+                    None
+                }
+            });
+        if let Some(attachment_id) = cancelled_attachment
+            && registry.active_attachments.get(&attachment_id) == Some(&operation_id)
+        {
+            registry.active_attachments.remove(&attachment_id);
         }
         Ok(snapshot(&registry, operation_id))
+    }
+
+    fn begin_finalization(&self, operation_id: OperationId) -> bool {
+        self.registry.lock().is_ok_and(|mut registry| {
+            registry
+                .operations
+                .get_mut(&operation_id)
+                .is_some_and(|entry| {
+                    if entry.state == AttachmentDownloadStateV1::Downloading
+                        && !entry.cancellation.is_cancelled()
+                    {
+                        entry.finalizing = true;
+                        true
+                    } else {
+                        false
+                    }
+                })
+        })
     }
 
     fn update_progress(&self, operation_id: OperationId, bytes_written: u64) {
@@ -122,11 +157,16 @@ impl AttachmentOperationState {
     ) {
         if let Ok(mut registry) = self.registry.lock() {
             let attachment_id = registry.operations.get_mut(&operation_id).map(|entry| {
-                entry.state = state;
-                entry.error = error;
+                if entry.state != AttachmentDownloadStateV1::Cancelled {
+                    entry.state = state;
+                    entry.error = error;
+                }
+                entry.finalizing = false;
                 entry.attachment_id
             });
-            if let Some(attachment_id) = attachment_id {
+            if let Some(attachment_id) = attachment_id
+                && registry.active_attachments.get(&attachment_id) == Some(&operation_id)
+            {
                 registry.active_attachments.remove(&attachment_id);
             }
         }
@@ -254,14 +294,18 @@ pub(crate) fn spawn_attachment_download(
                             |checksum| checksum.eq_ignore_ascii_case(&checksum_sha256),
                         ) =>
                 {
-                    service
-                        .record_verification(AttachmentVerificationInput {
-                            attachment_id: source.attachment_id,
-                            size_bytes: bytes_written,
-                            checksum_sha256,
-                        })
-                        .await
-                        .map_err(map_service_error)
+                    if operations.begin_finalization(operation_id) {
+                        service
+                            .record_verification(AttachmentVerificationInput {
+                                attachment_id: source.attachment_id,
+                                size_bytes: bytes_written,
+                                checksum_sha256,
+                            })
+                            .await
+                            .map_err(map_service_error)
+                    } else {
+                        Err(error(AttachmentDownloadErrorCode::DownloadCancelled))
+                    }
                 }
                 Ok(_) => Err(error(AttachmentDownloadErrorCode::VerificationFailed)),
                 Err(code) => Err(error(code)),
@@ -471,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_registry_is_queryable_cancellable_and_attachment_scoped() {
+    fn operation_registry_cancels_immediately_without_clobbering_a_retry() {
         let operations = AttachmentOperationState::default();
         let operation_id = OperationId::new();
         let attachment_id = AttachmentId::new();
@@ -494,14 +538,68 @@ mod tests {
                 .bytes_written,
             "40"
         );
-        operations.cancel(operation_id).expect("cancel operation");
+        let cancelled = operations
+            .cancel(operation_id)
+            .expect("cancel operation")
+            .expect("cancelled snapshot");
+        assert_eq!(cancelled.state, AttachmentDownloadStateV1::Cancelled);
         assert!(cancellation.is_cancelled());
-        operations.terminal(operation_id, AttachmentDownloadStateV1::Cancelled, None);
         assert!(
             operations
                 .active_snapshot(attachment_id)
                 .expect("inactive snapshot")
                 .is_none()
         );
+
+        let retry_operation_id = OperationId::new();
+        operations
+            .insert(
+                retry_operation_id,
+                attachment_id,
+                Some(100),
+                Arc::new(DesktopCancellation::default()),
+            )
+            .expect("insert retry operation");
+        operations.terminal(operation_id, AttachmentDownloadStateV1::Failed, None);
+        assert_eq!(
+            operations
+                .get(operation_id)
+                .expect("cancelled status")
+                .expect("cancelled operation")
+                .state,
+            AttachmentDownloadStateV1::Cancelled
+        );
+        assert_eq!(
+            operations
+                .active_snapshot(attachment_id)
+                .expect("retry snapshot")
+                .expect("retry operation")
+                .operation_id,
+            retry_operation_id.to_string()
+        );
+    }
+
+    #[test]
+    fn finalization_claim_makes_completion_win_a_late_cancel() {
+        let operations = AttachmentOperationState::default();
+        let operation_id = OperationId::new();
+        let attachment_id = AttachmentId::new();
+        let cancellation = Arc::new(DesktopCancellation::default());
+        operations
+            .insert(
+                operation_id,
+                attachment_id,
+                Some(5),
+                Arc::clone(&cancellation),
+            )
+            .expect("insert operation");
+
+        assert!(operations.begin_finalization(operation_id));
+        let snapshot = operations
+            .cancel(operation_id)
+            .expect("late cancel")
+            .expect("operation snapshot");
+        assert_eq!(snapshot.state, AttachmentDownloadStateV1::Downloading);
+        assert!(!cancellation.is_cancelled());
     }
 }

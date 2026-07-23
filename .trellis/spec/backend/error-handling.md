@@ -407,6 +407,13 @@ cancel_attachment_download(String) -> Result<AttachmentDownloadSnapshotV1, Attac
   total bytes, and one fixed safe error. Status polling is authoritative.
 - Duplicate active requests for one attachment return the active snapshot. If registry insertion
   fails after transfer creation, abort the transfer before returning the registry error.
+- Cancellation atomically changes a non-finalizing operation to `cancelled`, releases only that
+  operation's active-attachment mapping, and prevents its background transfer from claiming final
+  file publication. The cancelled snapshot remains terminal even if the old background task later
+  reports another result, and that callback must never remove a newer retry operation.
+- Once a successful transfer atomically claims finalization, completion wins a simultaneous late
+  cancel; the cancel command returns the still-downloading snapshot until finalization reports its
+  terminal result.
 
 ### 4. Validation & Error Matrix
 
@@ -414,6 +421,8 @@ cancel_attachment_download(String) -> Result<AttachmentDownloadSnapshotV1, Attac
 | --- | --- |
 | Invalid search request/cursor scope | fixed `invalid_data` storage error |
 | Save chooser cancelled | `Ok(None)`; no banner or operation |
+| Active download cancelled before finalization | Return a `cancelled` snapshot immediately; abort its partial output |
+| Cancel races after finalization was claimed | Keep the operation active and publish the eventual completion/failure |
 | Offline, unavailable account/provider, collision, oversize, write/checksum failure | matching fixed attachment code/message/retryability |
 | Invalid/unknown operation or attachment ID | fixed `attachment_not_found` |
 | Internal repository/provider/path detail exists | map to allowlisted code; never serialize detail |
@@ -429,7 +438,8 @@ cancel_attachment_download(String) -> Result<AttachmentDownloadSnapshotV1, Attac
 - Core serialization tests assert exact camel/snake-case shapes, decimal strings, fixed messages,
   retryability, and absence of path fields.
 - Tauri tests cover chooser cancellation, registry scope/cancellation, unknown operations, safe mapping,
-  provider routing, and cleanup when post-file operation setup fails.
+  provider routing, cleanup when post-file operation setup fails, retry mapping isolation, and the
+  cancel-versus-finalization race.
 - Run binding drift, frontend decoder tests, strict Clippy, and workspace tests.
 
 ### 7. Wrong vs Correct
@@ -443,6 +453,14 @@ let snapshot = match operations.insert(operation_id, attachment_id, total, cance
     Ok(snapshot) => snapshot,
     Err(error) => { let _ = repository.abort_attachment_transfer(&transfer); return Err(error); }
 };
+
+// Wrong: an old terminal callback can delete the active mapping for a newer retry.
+registry.active_attachments.remove(&attachment_id);
+
+// Correct: cancellation is sticky, and callbacks release only their own mapping.
+if registry.active_attachments.get(&attachment_id) == Some(&operation_id) {
+    registry.active_attachments.remove(&attachment_id);
+}
 ```
 
 ## Scenario: privacy-safe security diagnostics IPC
