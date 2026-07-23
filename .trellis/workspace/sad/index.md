@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-07-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~433 | Active |
+| `journal-1.md` | ~467 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-23 | Complete attachments and offline search | `55c5230`, `27c633a` | `main` |
 | 12 | 2026-07-23 | Publish Unimail v0.1.0 test prerelease | `34753b9`, `ef1fb24` | `main` |
 | 11 | 2026-07-22 | Prepare and verify v0.1.0 release dry run | `778cea4`, `f33285c` | `main` |
 | 10 | 2026-07-22 | Refresh Trellis V1 architecture guidance | `1f35dce` | `main` |

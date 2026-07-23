@@ -431,3 +431,37 @@ Finalized the 0.1.0 Chinese changelog, pushed the annotated v0.1.0 tag, approved
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Complete attachments and offline search
+
+**Date**: 2026-07-23
+**Task**: Complete attachments and offline search
+**Branch**: `main`
+
+### Summary
+
+修复真实后端附件取消与重试竞态，完成附件保存和离线搜索验收，并归档附件/搜索子任务及 Unimail V1 父任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `55c5230` | (see git log) |
+| `27c633a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
