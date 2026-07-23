@@ -397,3 +397,37 @@ Prepared the exact Simplified Chinese v0.1.0 changelog section, passed local rel
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Publish Unimail v0.1.0 test prerelease
+
+**Date**: 2026-07-23
+**Task**: Publish Unimail v0.1.0 test prerelease
+**Branch**: `main`
+
+### Summary
+
+Finalized the 0.1.0 Chinese changelog, pushed the annotated v0.1.0 tag, approved the protected release deployment, verified the unsigned Windows and ad-hoc macOS prerelease assets and checksums, recorded acceptance evidence, and archived the release integration task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `34753b9` | (see git log) |
+| `ef1fb24` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
